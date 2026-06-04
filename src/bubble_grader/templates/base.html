@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Grader Form v2{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Set theme BEFORE body renders so there's no flash. localStorage > system. -->
+  <script>
+    (function() {
+      var saved = null;
+      try { saved = localStorage.getItem('gf2-theme'); } catch (e) {}
+      var sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = saved || (sysDark ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+  <style>
+    /* ---- Design tokens ---- */
+    :root {
+      --color-primary: #1E3A5F;
+      --color-primary-hover: #162C49;
+      --color-on-primary: #FFFFFF;
+      --color-secondary: #2563EB;
+      --color-secondary-hover: #1D4ED8;
+      --color-accent: #059669;
+      --color-accent-hover: #047857;
+      --color-bg: #F8FAFC;
+      --color-surface: #FFFFFF;
+      --color-fg: #0F172A;
+      --color-fg-muted: #475569;
+      --color-fg-subtle: #94A3B8;
+      --color-muted: #F1F5F9;
+      --color-border: #E2E8F0;
+      --color-border-strong: #CBD5E1;
+      --color-destructive: #DC2626;
+      --color-destructive-bg: #FEE2E2;
+      --color-success: #059669;
+      --color-success-bg: #D1FAE5;
+      --color-warn: #B45309;
+      --color-warn-bg: #FEF3C7;
+      --color-info-bg: #DBEAFE;
+      --color-ring: rgba(37, 99, 235, 0.35);
+
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+      --shadow-md: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 12px rgba(15, 23, 42, 0.04);
+      --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.08);
+
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --radius-pill: 999px;
+
+      --space-1: 4px;  --space-2: 8px;  --space-3: 12px;  --space-4: 16px;
+      --space-5: 20px; --space-6: 24px; --space-8: 32px;  --space-10: 40px;
+
+      --font-body: 'Fira Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --font-mono: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    /* ---- Dark theme (token-level overrides) ---- */
+    [data-theme="dark"] {
+      --color-primary: #93C5FD;          /* brand mark + code text — bright on dark */
+      --color-primary-hover: #BFDBFE;
+      --color-secondary: #3B82F6;        /* button bg, links */
+      --color-secondary-hover: #60A5FA;
+      --color-on-primary: #FFFFFF;
+      --color-accent: #10B981;
+      --color-accent-hover: #34D399;
+
+      --color-bg: #0B1220;               /* page bg — slightly deeper than slate-900 */
+      --color-surface: #111827;          /* cards */
+      --color-fg: #F1F5F9;
+      --color-fg-muted: #CBD5E1;
+      --color-fg-subtle: #94A3B8;
+      --color-muted: #1E293B;            /* table-header bg, code bg, hover row */
+      --color-border: #1E293B;
+      --color-border-strong: #334155;
+
+      --color-destructive: #F87171;
+      --color-destructive-bg: rgba(248, 113, 113, 0.14);
+      --color-success: #34D399;
+      --color-success-bg: rgba(52, 211, 153, 0.14);
+      --color-warn: #FCD34D;
+      --color-warn-bg: rgba(251, 191, 36, 0.14);
+      --color-info-bg: rgba(96, 165, 250, 0.16);
+      --color-ring: rgba(96, 165, 250, 0.55);
+
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+      --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.4), 0 6px 16px rgba(0, 0, 0, 0.35);
+      --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.55);
+
+      color-scheme: dark; /* hints native form controls / scrollbars to render dark */
+    }
+
+    /* Flash text colors need light variants on dark — the dark hex literals
+       baked into the light theme would be unreadable on a dark tinted bg. */
+    [data-theme="dark"] .flash.ok   { color: #6EE7B7; }
+    [data-theme="dark"] .flash.warn { color: #FCD34D; }
+    [data-theme="dark"] .flash.bad  { color: #FCA5A5; }
+
+    /* Pills already use semantic tokens; their tints come from --color-*-bg. */
+
+    /* ---- Reset + base ---- */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--color-bg);
+      color: var(--color-fg);
+      font-family: var(--font-body);
+      font-size: 15px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    a {
+      color: var(--color-secondary);
+      text-decoration: none;
+      transition: color 150ms ease;
+    }
+    a:hover { color: var(--color-secondary-hover); text-decoration: underline; }
+    h1, h2, h3, h4 {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--color-fg);
+      margin: 0 0 var(--space-3);
+    }
+    h1 { font-size: 28px; line-height: 1.2; }
+    h2 { font-size: 22px; line-height: 1.25; }
+    h3 { font-size: 16px; line-height: 1.3; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-fg-muted); }
+
+    /* ---- Layout ---- */
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: var(--space-8) var(--space-6);
+    }
+    @media (max-width: 640px) {
+      .wrap { padding: var(--space-5) var(--space-4); }
+    }
+
+    /* ---- Top bar ---- */
+    header.bar {
+      position: sticky; top: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 var(--space-6);
+      background: var(--color-surface);
+      border-bottom: 1px solid var(--color-border);
+      box-shadow: var(--shadow-sm);
+      height: 56px;
+    }
+    header.bar .brand {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--color-primary);
+      text-decoration: none;
+      display: inline-flex; align-items: center; gap: var(--space-2);
+    }
+    header.bar .brand:hover { color: var(--color-primary-hover); text-decoration: none; }
+    header.bar .brand::before {
+      content: "";
+      display: inline-block;
+      width: 10px; height: 10px;
+      background: var(--color-accent);
+      border-radius: 2px;
+    }
+    header.bar nav {
+      display: flex; align-items: center; gap: var(--space-5);
+    }
+    header.bar nav a {
+      color: var(--color-fg-muted);
+      font-weight: 500;
+      font-size: 14px;
+    }
+    header.bar nav a:hover { color: var(--color-fg); text-decoration: none; }
+    header.bar nav .who {
+      color: var(--color-fg-subtle);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 4px 10px;
+      background: var(--color-muted);
+      border-radius: var(--radius-pill);
+    }
+    .theme-toggle {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 34px; height: 34px;
+      background: transparent;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      color: var(--color-fg-muted);
+      cursor: pointer;
+      transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+    }
+    .theme-toggle:hover { background: var(--color-muted); color: var(--color-fg); border-color: var(--color-border-strong); }
+    .theme-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--color-ring); }
+    .theme-toggle svg { display: none; }
+    [data-theme="light"] .theme-toggle .icon-moon { display: block; }
+    [data-theme="dark"]  .theme-toggle .icon-sun  { display: block; }
+
+    /* ---- Card ---- */
+    .card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      padding: var(--space-6);
+      margin-bottom: var(--space-5);
+      box-shadow: var(--shadow-sm);
+    }
+    .card > h3:first-child { margin-top: 0; }
+
+    /* ---- Crumbs ---- */
+    .crumbs {
+      font-size: 13px;
+      color: var(--color-fg-subtle);
+      margin-bottom: var(--space-4);
+      font-family: var(--font-mono);
+    }
+    .crumbs a { color: var(--color-fg-muted); }
+    .crumbs a:hover { color: var(--color-fg); }
+
+    /* ---- Buttons ---- */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: var(--space-2);
+      padding: 9px 16px;
+      font-family: var(--font-body);
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      background: var(--color-secondary);
+      color: var(--color-on-primary);
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 150ms ease, transform 100ms ease, box-shadow 150ms ease;
+      box-shadow: var(--shadow-sm);
+    }
+    .btn:hover { background: var(--color-secondary-hover); text-decoration: none; color: var(--color-on-primary); }
+    .btn:active { transform: translateY(1px); }
+    .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--color-ring); }
+    .btn:disabled, .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+    .btn.secondary {
+      background: var(--color-surface);
+      color: var(--color-fg);
+      border-color: var(--color-border-strong);
+    }
+    .btn.secondary:hover { background: var(--color-muted); color: var(--color-fg); }
+    .btn.danger { background: var(--color-destructive); }
+    .btn.danger:hover { background: #B91C1C; }
+    .btn.accent { background: var(--color-accent); }
+    .btn.accent:hover { background: var(--color-accent-hover); }
+    .btn.ghost { background: transparent; color: var(--color-fg-muted); box-shadow: none; }
+    .btn.ghost:hover { background: var(--color-muted); color: var(--color-fg); }
+
+    /* ---- Pills / badges ---- */
+    .pill {
+      display: inline-flex; align-items: center;
+      padding: 2px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-radius: var(--radius-pill);
+      background: var(--color-muted);
+      color: var(--color-fg-muted);
+      border: 1px solid var(--color-border);
+    }
+    .pill.ok    { background: var(--color-success-bg); color: var(--color-success); border-color: transparent; }
+    .pill.warn  { background: var(--color-warn-bg);    color: var(--color-warn);    border-color: transparent; }
+    .pill.bad   { background: var(--color-destructive-bg); color: var(--color-destructive); border-color: transparent; }
+    .pill.draft { background: var(--color-info-bg);    color: var(--color-secondary); border-color: transparent; }
+
+    /* ---- Table ---- */
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    th {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--color-fg-subtle);
+      background: var(--color-muted);
+      border-bottom: 1px solid var(--color-border-strong);
+    }
+    tbody tr { transition: background 150ms ease; }
+    tbody tr:hover { background: var(--color-muted); }
+    tbody tr:last-child td { border-bottom: 0; }
+    td .muted { font-size: 12px; }
+    td strong { font-family: var(--font-mono); font-weight: 600; }
+
+    /* ---- Forms ---- */
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--color-fg-muted);
+      margin: var(--space-4) 0 var(--space-2);
+    }
+    input[type="text"], input[type="number"], input[type="email"], input[type="password"], select, textarea {
+      width: 100%;
+      padding: 9px 12px;
+      font-family: var(--font-body);
+      font-size: 14px;
+      color: var(--color-fg);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius-md);
+      transition: border-color 150ms ease, box-shadow 150ms ease;
+    }
+    input[type="text"]:focus, input[type="number"]:focus, input[type="email"]:focus,
+    input[type="password"]:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--color-secondary);
+      box-shadow: 0 0 0 3px var(--color-ring);
+    }
+    input[type="file"] { font-size: 13px; font-family: var(--font-mono); color: var(--color-fg-muted); }
+    textarea { min-height: 90px; resize: vertical; font-family: inherit; }
+    input[type="checkbox"] { accent-color: var(--color-secondary); cursor: pointer; }
+
+    /* ---- Flash ---- */
+    .flash {
+      padding: 12px 16px;
+      border-radius: var(--radius-md);
+      margin-bottom: var(--space-5);
+      font-size: 14px;
+      border: 1px solid transparent;
+      display: flex; align-items: center; gap: var(--space-3);
+    }
+    .flash.ok   { background: var(--color-success-bg);    color: #064E3B; border-color: rgba(5, 150, 105, 0.2); }
+    .flash.warn { background: var(--color-warn-bg);       color: #78350F; border-color: rgba(180, 83, 9, 0.2); }
+    .flash.bad  { background: var(--color-destructive-bg); color: #7F1D1D; border-color: rgba(220, 38, 38, 0.2); }
+    .flash::before {
+      content: "";
+      width: 6px; height: 6px;
+      background: currentColor;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* ---- Utility ---- */
+    .row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; }
+    .stack { display: flex; flex-direction: column; gap: var(--space-3); }
+    .muted { color: var(--color-fg-muted); font-size: 13px; }
+    .subtle { color: var(--color-fg-subtle); }
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.875em;
+      background: var(--color-muted);
+      color: var(--color-primary);
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--color-border);
+    }
+
+    /* ---- Accessibility ---- */
+    :focus-visible { outline: 2px solid var(--color-secondary); outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <a class="brand" href="/">Grader Form v2</a>
+    <nav>
+      {% if signed_in_as %}
+        <a href="/dashboard">Courses</a>
+        <a href="/tests">Tests</a>
+        <span class="who">{{ signed_in_as }}</span>
+        <a href="/signout" class="muted">Sign out</a>
+      {% else %}
+        <a href="/oauth/start" class="btn">Sign in</a>
+      {% endif %}
+      <button class="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle light / dark theme" onclick="toggleTheme()">
+        <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </nav>
+  </header>
+  <script>
+    function toggleTheme() {
+      var cur = document.documentElement.getAttribute('data-theme');
+      var next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('gf2-theme', next); } catch (e) {}
+    }
+  </script>
+  <main class="wrap">
+    {% if flash %}<div class="flash {{ flash.kind }}">{{ flash.msg }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="crumbs"><a href="/dashboard">Courses</a> / <a href="/courses/{{ course.id }}">{{ course.name }}</a> / {{ cw.title }}</div>
+
+  <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
+    <div>
+      <h1>{{ cw.title }}</h1>
+      <p class="muted">
+        max points: {{ cw.maxPoints or "—" }} ·
+        state: {{ cw.state }} ·
+        {% if cw.is_app_owned %}<span class="pill ok">app-owned (grades can be released)</span>
+        {% else %}<span class="pill warn">created in Classroom UI — grade release via API is blocked by Google</span>{% endif %}
+      </p>
+    </div>
+    <a class="btn secondary" target="_blank" href="{{ cw.alternateLink }}">Open in Classroom ↗</a>
+  </div>
+
+  <div class="card">
+    <h3>Grade</h3>
+    <form method="post" action="/courses/{{ course.id }}/coursework/{{ cw.id }}/grade">
+      <label>Test to grade against</label>
+      <select name="test_id" required style="max-width: 420px;">
+        {% if not assigned_test_id %}<option value="">— pick a test —</option>{% endif %}
+        {% for t in tests %}
+          <option value="{{ t.id }}" {% if t.id == assigned_test_id %}selected{% endif %}>{{ t.name }}</option>
+        {% endfor %}
+      </select>
+      {% if not tests %}
+        <p class="muted">No tests registered yet — <a href="/tests">add one</a> first.</p>
+      {% endif %}
+      <div style="margin-top: 16px;">
+        <button class="btn" type="submit" {% if not tests %}disabled{% endif %}>Fetch + grade all turned-in</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content: space-between; align-items: center;">
+      <h3 style="margin: 0;">Submissions ({{ rows|length }})</h3>
+      {% if rows %}
+        <input type="text" id="student-search" placeholder="Search by name or email…"
+               oninput="filterStudents(this.value)"
+               style="max-width: 280px; margin: 0;">
+      {% endif %}
+    </div>
+    {% if not rows %}
+      <p class="muted" style="margin-top:12px;">No submissions to show yet. Click <strong>Fetch + grade</strong> above after students turn in.</p>
+    {% else %}
+      <form method="post" action="/courses/{{ course.id }}/coursework/{{ cw.id }}/release">
+        <table id="submissions-table" style="margin-top: 12px;">
+          <thead>
+            <tr>
+              <th style="width: 28px;">
+                <input type="checkbox" id="check-all" checked
+                       onchange="document.querySelectorAll('input[name=student_ids]:not([disabled])').forEach(c => c.checked = this.checked)">
+              </th>
+              <th>Student</th>
+              <th>State</th>
+              <th>Composite</th>
+              <th>Sections (E/M/R/S)</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+              <tr>
+                <td>
+                  <input type="checkbox" name="student_ids" value="{{ r.student_id }}"
+                         {% if r.composite is not none %}checked{% else %}disabled title="No graded composite — can't release"{% endif %}>
+                </td>
+                <td>
+                  <a href="/courses/{{ course.id }}/coursework/{{ cw.id }}/students/{{ r.student_id }}" title="Open detail / overrides">{{ r.name or r.student_id }}</a>
+                  <div class="muted">{{ r.email or "" }}</div>
+                </td>
+                <td>{{ r.classroom_state or "—" }}</td>
+                <td><strong>{{ r.composite if r.composite is not none else "—" }}</strong></td>
+                <td class="muted">{{ r.section_scaled or "—" }}</td>
+                <td class="muted">{{ r.graded_at or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <div style="margin-top: 16px;" class="muted">Tick a row to include that student. Untick rows to hold them back.</div>
+
+        <div class="row" style="margin-top: 12px; gap: 16px;">
+          <label style="margin: 0; flex: 1;">
+            Sign feedback emails as (optional)
+            <input type="text" name="teacher_name" placeholder="e.g. Ms. Smith" style="margin-top: 4px;">
+          </label>
+        </div>
+
+        <div class="row" style="margin-top: 16px; justify-content: flex-end; gap: 6px;">
+          {% if cw.is_app_owned %}
+            <button class="btn secondary" type="submit"
+                    formaction="/courses/{{ course.id }}/coursework/{{ cw.id }}/release"
+                    name="action" value="draft">Set draft for selected</button>
+            <button class="btn" type="submit"
+                    formaction="/courses/{{ course.id }}/coursework/{{ cw.id }}/release"
+                    name="action" value="release">Release selected to students</button>
+          {% else %}
+            <span class="pill warn" title="Created in Classroom UI — Google API rejects grade writes">grade release disabled (not app-owned)</span>
+          {% endif %}
+          <button class="btn secondary" type="submit"
+                  formaction="/courses/{{ course.id }}/coursework/{{ cw.id }}/feedback"
+                  title="Email each selected student their per-section score + missed questions">
+            Send feedback emails
+          </button>
+        </div>
+      </form>
+    {% endif %}
+  </div>
+
+<script>
+  // Client-side filter: match name + email columns. Hides rows that don't match.
+  function filterStudents(q) {
+    q = (q || "").toLowerCase().trim();
+    const rows = document.querySelectorAll('#submissions-table tbody tr');
+    let shown = 0;
+    rows.forEach(tr => {
+      const txt = (tr.dataset.search || tr.textContent || "").toLowerCase();
+      const match = !q || txt.includes(q);
+      tr.style.display = match ? '' : 'none';
+      if (match) shown++;
+    });
+    // Untick "select all" if the search hides rows so people don't accidentally
+    // act on hidden students.
+    const all = document.getElementById('check-all');
+    if (all && q) all.checked = false;
+  }
+</script>
+{% endblock %}

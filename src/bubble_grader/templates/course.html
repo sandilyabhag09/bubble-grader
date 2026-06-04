@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="crumbs"><a href="/dashboard">Courses</a> / {{ course.name }}</div>
+  <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
+    <h1>{{ course.name }}</h1>
+    <a class="btn" href="/courses/{{ course.id }}/new">+ New assignment</a>
+  </div>
+
+  <div class="card">
+    <h3>Assignments</h3>
+    {% if not coursework %}
+      <p class="muted">No assignments yet. Use <strong>New assignment</strong> above to create one.</p>
+    {% else %}
+      <table>
+        <thead><tr><th>Title</th><th>State</th><th>Max pts</th><th>Owned</th><th></th></tr></thead>
+        <tbody>
+          {% for cw in coursework %}
+          <tr>
+            <td>{{ cw.title }}</td>
+            <td>
+              {% if cw.state == "PUBLISHED" %}<span class="pill ok">published</span>
+              {% elif cw.state == "DRAFT" %}<span class="pill draft">draft</span>
+              {% else %}<span class="pill warn">{{ cw.state }}</span>{% endif %}
+            </td>
+            <td>{{ cw.maxPoints or "-" }}</td>
+            <td>
+              {% if cw.is_app_owned %}<span class="pill ok" title="Created via bubble-grader — can be auto-graded">app</span>
+              {% else %}<span class="pill warn" title="Created in Classroom UI — grades can't be written via API">manual</span>{% endif %}
+            </td>
+            <td><a class="btn secondary" href="/courses/{{ course.id }}/coursework/{{ cw.id }}">Open →</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+{% endblock %}

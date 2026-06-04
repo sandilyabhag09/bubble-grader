@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="crumbs"><a href="/dashboard">Courses</a> / <a href="/courses/{{ course.id }}">{{ course.name }}</a> / New assignment</div>
+  <h1>Create assignment</h1>
+  <div class="card">
+    <form method="post" action="/courses/{{ course.id }}/new">
+      <label>Title</label>
+      <input type="text" name="title" required placeholder="e.g. ACT Practice Test — Form H31">
+
+      <label>Description (optional)</label>
+      <textarea name="description" placeholder="Instructions for students, e.g. 'Submit a clear scan or photo of your filled answer sheet.'"></textarea>
+
+      <label>Test (controls which key/scaler we grade against)</label>
+      <select name="test_id">
+        <option value="">— pick a saved test —</option>
+        {% for t in tests %}
+          <option value="{{ t.id }}">{{ t.name }} ({{ t.id }})</option>
+        {% endfor %}
+      </select>
+      <p class="muted">Adding tests: see <a href="/tests">Tests</a>.</p>
+
+      <label>Max points (use 36 so the composite displays naturally)</label>
+      <input type="number" name="max_points" value="36" min="1" step="1">
+
+      <div class="row" style="margin-top: 8px;">
+        <input type="checkbox" id="draft" name="draft" value="1">
+        <label for="draft" style="margin: 0; display: inline;">Create as draft (teacher-only)</label>
+      </div>
+
+      <div style="margin-top: 20px;">
+        <button class="btn" type="submit">Create assignment</button>
+        <a class="btn secondary" href="/courses/{{ course.id }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

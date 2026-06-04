@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+  <div style="text-align: center; padding: 80px 24px 40px;">
+    <div style="display: inline-flex; padding: 6px 14px; border-radius: 999px; background: var(--color-info-bg); color: var(--color-secondary); font-family: var(--font-mono); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 24px;">
+      ACT bubble-sheet auto-grading
+    </div>
+    <h1 style="font-size: 44px; max-width: 620px; margin: 0 auto 16px;">
+      Grader Form <span style="color: var(--color-secondary);">v2</span>
+    </h1>
+    <p class="muted" style="max-width: 520px; margin: 0 auto 32px; font-size: 16px;">
+      Pull student scans from Google Classroom, read the bubble sheets, score against an answer key,
+      and push composites back — all from one page.
+    </p>
+    {% if signed_in_as %}
+      <p>Signed in as <code>{{ signed_in_as }}</code>.</p>
+      <p style="margin-top: 24px;"><a class="btn" href="/dashboard">Go to dashboard →</a></p>
+    {% else %}
+      <p><a class="btn" style="padding: 12px 24px; font-size: 15px;" href="/oauth/start">Sign in with Google</a></p>
+      <p class="subtle" style="margin-top: 16px; font-size: 12px;">Uses your Classroom + Gmail permissions only.</p>
+    {% endif %}
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 32px;">
+    <div class="card" style="margin: 0;">
+      <h3 style="margin-top: 0;">Fetch & grade</h3>
+      <p class="muted">Auto-download every TURNED_IN submission, run OMR on each scan, persist composites.</p>
+    </div>
+    <div class="card" style="margin: 0;">
+      <h3 style="margin-top: 0;">Manual overrides</h3>
+      <p class="muted">Pre-filled rows for BLANK/MULTI questions. Type the right answer; the score recomputes.</p>
+    </div>
+    <div class="card" style="margin: 0;">
+      <h3 style="margin-top: 0;">Release + feedback</h3>
+      <p class="muted">Push grades back to Classroom. Email per-section results with a marked-up PDF attached.</p>
+    </div>
+  </div>
+{% endblock %}

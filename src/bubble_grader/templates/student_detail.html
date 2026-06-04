@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="crumbs">
+    <a href="/dashboard">Courses</a> /
+    <a href="/courses/{{ course.id }}">{{ course.name }}</a> /
+    <a href="/courses/{{ course.id }}/coursework/{{ cw.id }}">{{ cw.title }}</a> /
+    {{ student_name }}
+  </div>
+
+  <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
+    <div>
+      <h1>{{ student_name }}</h1>
+      <p class="muted">{{ student_email or "" }}</p>
+    </div>
+    <div style="text-align: right;">
+      <div class="muted">composite</div>
+      <div style="font-size: 32px; font-weight: 700;">{{ composite if composite is not none else "—" }}<span class="muted" style="font-size:16px; font-weight:400;">/36</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Per-section</h3>
+    <table>
+      <thead>
+        <tr><th>Section</th><th>Raw</th><th>Scaled</th><th>Correct</th><th>Wrong</th><th>Blank</th><th>Multi</th></tr>
+      </thead>
+      <tbody>
+        {% for sec in sections %}
+        <tr>
+          <td>{{ sec.display }}</td>
+          <td>{{ sec.info.raw_score }}/{{ sec.info.n_questions }}</td>
+          <td><strong>{{ sec.info.scaled_score if sec.info.scaled_score is not none else "—" }}</strong></td>
+          <td>{{ sec.info.n_correct }}</td>
+          <td>{{ sec.info.n_incorrect }}</td>
+          <td>{{ sec.info.n_blank }}</td>
+          <td>{{ sec.info.n_multi }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Manual overrides</h3>
+    <p class="muted">
+      Rows pre-filled below are the questions the reader flagged BLANK or MULTI. Fill in
+      what the student actually marked — empty "New answer" cells are ignored on submit.
+      Use <strong>+ Add row beneath</strong> to override any other question.
+    </p>
+
+    <form method="post" action="/courses/{{ course.id }}/coursework/{{ cw.id }}/students/{{ student_id }}/overrides">
+      <table id="override-table" style="margin-top: 12px;">
+        <thead>
+          <tr>
+            <th>Section</th>
+            <th>Q in test</th>
+            <th>System read</th>
+            <th>Correct</th>
+            <th>New answer</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in flagged %}
+          <tr>
+            <td>
+              <select name="section" required>
+                {% for sec in section_options %}
+                  <option value="{{ sec.id }}" {% if sec.id == r.section %}selected{% endif %}>{{ sec.label }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td><input name="q_in_test" type="number" value="{{ r.q_in_test }}" min="1" required style="width: 80px;"></td>
+            <td class="muted">{{ r.given }}</td>
+            <td class="muted">{{ r.correct or "?" }}</td>
+            <td><input name="answer" type="text" maxlength="1" placeholder="A-K" style="width: 60px; text-transform: uppercase;"></td>
+            <td><button type="button" onclick="this.closest('tr').remove()" class="btn secondary">Remove</button></td>
+          </tr>
+          {% endfor %}
+          {% if not flagged %}
+          <tr id="empty-hint"><td colspan="6" class="muted">No flagged questions on this submission. Use "+ Add row" to override any question.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+
+      <div class="row" style="margin-top: 16px; justify-content: space-between;">
+        <button type="button" id="add-row-btn" class="btn secondary">+ Add row beneath</button>
+        <div class="row" style="gap: 16px;">
+          <label style="margin: 0; display: flex; align-items: center; gap: 6px; font-size: 13px;">
+            <input type="checkbox" name="push_to_classroom" value="1" checked>
+            Also push updated score to Classroom
+          </label>
+          <button type="submit" class="btn">Save overrides + recalculate</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  {% if overrides_log %}
+  <div class="card">
+    <h3>Override history</h3>
+    <table>
+      <thead><tr><th>When (latest first)</th><th>Section</th><th>Q in test</th><th>Was</th><th>Now</th></tr></thead>
+      <tbody>
+        {% for o in overrides_log|reverse %}
+        <tr>
+          <td class="muted">{{ loop.revindex }}</td>
+          <td>{{ o.section or "—" }}</td>
+          <td>{{ o.q_in_test or o.q }}</td>
+          <td class="muted">{{ o.old or "—" }}</td>
+          <td><strong>{{ o.new }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+<script>
+  // Auto-uppercase answer fields as you type.
+  document.addEventListener('input', e => {
+    if (e.target.matches('input[name=answer]')) {
+      e.target.value = e.target.value.toUpperCase();
+    }
+  });
+
+  const sectionOptions = `
+    <option value="Test 1">English</option>
+    <option value="Test 2">Math</option>
+    <option value="Test 3">Reading</option>
+    <option value="Test 4">Science</option>
+  `;
+
+  document.getElementById('add-row-btn').onclick = () => {
+    // Drop the empty-state hint row if it's still there.
+    const hint = document.getElementById('empty-hint');
+    if (hint) hint.remove();
+    const tbody = document.querySelector('#override-table tbody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><select name="section" required>${sectionOptions}</select></td>
+      <td><input name="q_in_test" type="number" min="1" required style="width: 80px;"></td>
+      <td class="muted">—</td>
+      <td class="muted">—</td>
+      <td><input name="answer" type="text" maxlength="1" placeholder="A-K" required style="width: 60px; text-transform: uppercase;"></td>
+      <td><button type="button" onclick="this.closest('tr').remove()" class="btn secondary">Remove</button></td>
+    `;
+    tbody.appendChild(tr);
+    // Focus the new q_in_test field for quick entry.
+    tr.querySelector('input[name=q_in_test]').focus();
+  };
+</script>
+{% endblock %}

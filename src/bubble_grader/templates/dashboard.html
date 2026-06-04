@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Your courses</h1>
+  {% if not courses %}
+    <div class="card muted">No active courses in your Classroom account.</div>
+  {% else %}
+    <div class="card">
+      <table>
+        <thead><tr><th>Course</th><th>Section</th><th></th></tr></thead>
+        <tbody>
+          {% for c in courses %}
+          <tr>
+            <td><strong>{{ c.name }}</strong></td>
+            <td class="muted">{{ c.section or "" }}</td>
+            <td><a class="btn secondary" href="/courses/{{ c.id }}">Open →</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

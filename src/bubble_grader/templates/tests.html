@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Tests</h1>
+  <p class="muted">
+    A "test" pairs an ACT answer key with its raw→scaled conversion table. Add a test once
+    per form you administer; pick it when creating new Classroom assignments.
+  </p>
+
+  <div class="card">
+    <h3>Saved</h3>
+    {% if not tests %}
+      <p class="muted">No tests yet. Add one below.</p>
+    {% else %}
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Key</th><th>Scaler</th><th></th></tr></thead>
+        <tbody>
+          {% for t in tests %}
+          <tr>
+            <td><code>{{ t.id }}</code></td>
+            <td>{{ t.name }}<div class="muted">{{ t.notes or "" }}</div></td>
+            <td>{% if t.has_key %}<span class="pill ok">{{ t.key_count }} qs</span>{% else %}<span class="pill bad">missing</span>{% endif %}</td>
+            <td>{% if t.has_scaler %}<span class="pill ok">{{ t.scaler_count }} rows</span>{% else %}<span class="pill bad">missing</span>{% endif %}</td>
+            <td>
+              <form method="post" action="/tests/{{ t.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this test and any submissions tied to it?')">
+                <button class="btn danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Add a new test</h3>
+    <form method="post" action="/tests/new" enctype="multipart/form-data">
+      <label>Test ID (short, e.g. <code>form_h31</code>)</label>
+      <input type="text" name="test_id" required>
+
+      <label>Display name</label>
+      <input type="text" name="name" required placeholder="e.g. ACT Form H31 — Havana's Camerata">
+
+      <label>Notes (optional)</label>
+      <input type="text" name="notes">
+
+      <label>Answer key JSON (optional — can upload later)</label>
+      <input type="file" name="key_file" accept="application/json">
+
+      <label>Scaler JSON (optional — can upload later)</label>
+      <input type="file" name="scaler_file" accept="application/json">
+
+      <div style="margin-top: 20px;">
+        <button class="btn" type="submit">Save test</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}
