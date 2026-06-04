@@ -138,12 +138,15 @@ def cmd_setup(force_key: bool) -> None:
     else:
         failures.append(f"Python 3.12+ required (have {sys.version.split()[0]}).")
 
-    # 2. Tesseract OCR (needed for answer-key extraction from scanned PDFs).
+    # 2. Tesseract OCR — OPTIONAL. Only used by `import-key`/`import-scaler`
+    # on scanned answer-key PDFs. Everything else (grading, releasing,
+    # feedback) works without it, so we warn rather than fail.
     tess = shutil.which("tesseract")
     if tess:
         click.echo(f"  ✓ Tesseract at {tess}")
     else:
-        failures.append("Tesseract not found. macOS install: `brew install tesseract`")
+        click.echo("  · Tesseract not installed — that's OK. You won't be able to "
+                   "OCR answer-key PDFs (use `brew install tesseract` later if needed).")
 
     # 3. client_secret.json from the project owner.
     if CLIENT_SECRET_PATH.exists():
