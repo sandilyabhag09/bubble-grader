@@ -9,10 +9,21 @@ wheels/
 # Virtual environments
 .venv
 
-# App secrets / state — never commit
+# Local-only secrets — never commit
 .env
 secrets/
-data/
+
+# Local DB + downloaded student work (not for sharing)
+data/bubble_grader.db
+data/submissions/
+
+# Debug images regenerable from prepare-act; too large to ship
+data/sheets/*.detected.png
+data/sheets/*.labeled.png
+
+# (Sheet templates `data/sheets/act_sheet.*` and pre-loaded test JSONs
+#  `data/scoring/*.test.json` ARE committed so a fresh clone has everything
+#  needed to grade.)
 
 # OS
 .DS_Store

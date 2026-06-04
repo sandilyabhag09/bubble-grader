@@ -38,6 +38,49 @@ def cmd_serve() -> None:
     main()
 
 
+@cli.command("load-shared-tests")
+def cmd_load_shared_tests() -> None:
+    """Import every `*.test.json` shipped under `data/scoring/` into the local DB.
+
+    These files travel with the repo so a freshly-cloned install already has
+    the answer keys + scalers the maintainer pre-loaded (form_h31, etc.).
+    Re-running this command never overwrites a test whose key is already set.
+    """
+    tests_dir = DATA_DIR / "scoring"
+    if not tests_dir.exists():
+        click.echo(f"No {tests_dir} directory; nothing to load.")
+        return
+    files = sorted(tests_dir.glob("*.test.json"))
+    if not files:
+        click.echo("No *.test.json files in data/scoring/.")
+        return
+    n_loaded, n_skipped = 0, 0
+    for f in files:
+        try:
+            payload = json.loads(f.read_text())
+        except Exception as e:  # noqa: BLE001
+            click.echo(f"  ✗ {f.name}: parse error: {e}")
+            continue
+        test_id = payload.get("test_form") or f.stem.removesuffix(".test")
+        existing = dbmod.get_test(test_id)
+        if existing and existing.get("answer_key"):
+            click.echo(f"  · {test_id}: already in DB; skipping")
+            n_skipped += 1
+            continue
+        dbmod.upsert_test(
+            test_id,
+            name=payload.get("name") or test_id,
+            notes=payload.get("notes"),
+        )
+        if payload.get("answers"):
+            dbmod.set_test_answer_key(test_id, payload["answers"])
+        if payload.get("scaler"):
+            dbmod.set_test_scaler(test_id, payload["scaler"])
+        click.echo(f"  ✓ {test_id}: loaded")
+        n_loaded += 1
+    click.echo(f"\n{n_loaded} loaded · {n_skipped} already present.")
+
+
 @cli.command("update")
 def cmd_update() -> None:
     """Pull the latest code from GitHub and re-sync dependencies.
@@ -152,6 +195,29 @@ def cmd_setup(force_key: bool) -> None:
     from . import db as dbmod
     dbmod.init_db()
     click.echo(f"  ✓ Database initialized at data/bubble_grader.db")
+
+    # 6. Load any shared answer keys / scalers that ship with the repo.
+    tests_dir = DATA_DIR / "scoring"
+    shared_files = sorted(tests_dir.glob("*.test.json")) if tests_dir.exists() else []
+    n_loaded = 0
+    for f in shared_files:
+        try:
+            payload = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        test_id = payload.get("test_form") or f.stem.removesuffix(".test")
+        if (dbmod.get_test(test_id) or {}).get("answer_key"):
+            continue
+        dbmod.upsert_test(test_id, name=payload.get("name") or test_id, notes=payload.get("notes"))
+        if payload.get("answers"):
+            dbmod.set_test_answer_key(test_id, payload["answers"])
+        if payload.get("scaler"):
+            dbmod.set_test_scaler(test_id, payload["scaler"])
+        n_loaded += 1
+    if n_loaded:
+        click.echo(f"  ✓ Loaded {n_loaded} shared test(s) into the DB")
+    elif shared_files:
+        click.echo(f"  · {len(shared_files)} shared test(s) already present in DB")
 
     if failures:
         click.echo("\n⚠ Setup incomplete:")
