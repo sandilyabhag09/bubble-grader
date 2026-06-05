@@ -102,7 +102,7 @@ def _render(request: Request, name: str, **ctx: Any):
             "signed_in_as": _email(request),
             "flash": _pop_flash(request),
             "update_available": update.available,
-            "update_command": "bubble-grader update",
+            "update_command": "uv run bubble-grader update",
             **ctx,
         },
     )
