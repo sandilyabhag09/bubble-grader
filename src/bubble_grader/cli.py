@@ -45,7 +45,11 @@ def cmd_load_shared_tests() -> None:
 
     These files travel with the repo so a freshly-cloned install already has
     the answer keys + scalers the maintainer pre-loaded (form_h31, etc.).
-    Re-running this command never overwrites a test whose key is already set.
+
+    The JSON's `name` / `notes` are always refreshed so renames in the repo
+    propagate to the teacher's DB on the next `update`. The answer-key and
+    scaler are only written when the test isn't in the DB yet — UI edits
+    are preserved.
     """
     tests_dir = DATA_DIR / "scoring"
     if not tests_dir.exists():
@@ -55,7 +59,7 @@ def cmd_load_shared_tests() -> None:
     if not files:
         click.echo("No *.test.json files in data/scoring/.")
         return
-    n_loaded, n_skipped = 0, 0
+    n_loaded, n_renamed, n_skipped = 0, 0, 0
     for f in files:
         try:
             payload = json.loads(f.read_text())
@@ -63,23 +67,28 @@ def cmd_load_shared_tests() -> None:
             click.echo(f"  ✗ {f.name}: parse error: {e}")
             continue
         test_id = payload.get("test_form") or f.stem.removesuffix(".test")
+        new_name = payload.get("name") or test_id
+        new_notes = payload.get("notes")
         existing = dbmod.get_test(test_id)
         if existing and existing.get("answer_key"):
-            click.echo(f"  · {test_id}: already in DB; skipping")
-            n_skipped += 1
+            if existing.get("name") != new_name or existing.get("notes") != new_notes:
+                dbmod.upsert_test(test_id, name=new_name, notes=new_notes)
+                click.echo(f"  ↻ {test_id}: refreshed name/notes")
+                n_renamed += 1
+            else:
+                click.echo(f"  · {test_id}: already in DB; skipping")
+                n_skipped += 1
             continue
-        dbmod.upsert_test(
-            test_id,
-            name=payload.get("name") or test_id,
-            notes=payload.get("notes"),
-        )
+        dbmod.upsert_test(test_id, name=new_name, notes=new_notes)
         if payload.get("answers"):
             dbmod.set_test_answer_key(test_id, payload["answers"])
         if payload.get("scaler"):
             dbmod.set_test_scaler(test_id, payload["scaler"])
         click.echo(f"  ✓ {test_id}: loaded")
         n_loaded += 1
-    click.echo(f"\n{n_loaded} loaded · {n_skipped} already present.")
+    click.echo(
+        f"\n{n_loaded} loaded · {n_renamed} renamed · {n_skipped} unchanged."
+    )
 
 
 _TARBALL_URL = "https://github.com/sandilyabhag09/bubble-grader/archive/refs/heads/main.tar.gz"
