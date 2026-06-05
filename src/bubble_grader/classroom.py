@@ -81,6 +81,19 @@ def delete_coursework(email: str, course_id: str, coursework_id: str) -> dict:
     )
 
 
+def delete_coursework(email: str, course_id: str, coursework_id: str) -> dict:
+    """Delete a Classroom assignment. Only works for coursework our OAuth
+    project created — Google rejects deletes of UI-created coursework with 403.
+    """
+    svc = service_for(email, "classroom", "v1")
+    return (
+        svc.courses()
+        .courseWork()
+        .delete(courseId=course_id, id=coursework_id)
+        .execute()
+    )
+
+
 def create_coursework(
     email: str,
     course_id: str,

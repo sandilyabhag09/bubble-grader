@@ -275,6 +275,24 @@ def delete_app_assignment(
         return n
 
 
+def delete_app_assignment(
+    course_id: str, coursework_id: str, *, cascade_submissions: bool = True
+) -> int:
+    """Remove an assignment from app_assignments + (optionally) its submission rows."""
+    with get_conn() as conn:
+        n = 0
+        if cascade_submissions:
+            n += conn.execute(
+                "DELETE FROM submissions WHERE course_id = ? AND coursework_id = ?",
+                (course_id, coursework_id),
+            ).rowcount
+        n += conn.execute(
+            "DELETE FROM app_assignments WHERE course_id = ? AND coursework_id = ?",
+            (course_id, coursework_id),
+        ).rowcount
+        return n
+
+
 def list_app_assignments(course_id: str) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
