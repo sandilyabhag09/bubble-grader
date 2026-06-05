@@ -134,6 +134,16 @@ def _update_via_tarball(project_root: Path) -> None:
                 if f.is_file():
                     shutil.copy2(f, dst / f.name)
 
+    # Stamp the new SHA so the in-app update-available banner clears.
+    # Failures here are non-fatal — the banner will simply keep showing.
+    try:
+        from .version_check import fetch_remote_sha, record_installed_sha
+        sha = fetch_remote_sha()
+        if sha:
+            record_installed_sha(sha)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 @cli.command("update")
 def cmd_update() -> None:

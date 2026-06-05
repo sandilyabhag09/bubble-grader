@@ -35,11 +35,13 @@ from .submissions import (
     grade_classroom_assignment,
     release_grades,
 )
+from .version_check import snapshot as update_snapshot, start_background_poller
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     dbmod.init_db()
+    start_background_poller()
     yield
 
 
@@ -92,12 +94,15 @@ def _render(request: Request, name: str, **ctx: Any):
     # Modern Starlette signature: (request, name, context). The Request is also
     # auto-injected into the template context as `request` so templates can
     # access it directly.
+    update = update_snapshot()
     return templates.TemplateResponse(
         request,
         name,
         {
             "signed_in_as": _email(request),
             "flash": _pop_flash(request),
+            "update_available": update.available,
+            "update_command": "bubble-grader update",
             **ctx,
         },
     )

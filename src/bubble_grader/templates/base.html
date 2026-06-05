@@ -343,6 +343,28 @@
       display: flex; align-items: center; gap: var(--space-3);
     }
     .flash.ok   { background: var(--color-success-bg);    color: #064E3B; border-color: rgba(5, 150, 105, 0.2); }
+
+    /* Update-available bar shown above the header when the local install is
+       behind the GitHub main branch. Same green family as the success flash
+       but full-bleed so it's hard to miss. */
+    .update-bar {
+      background: var(--color-success);
+      color: white;
+      padding: 8px 24px;
+      font-size: 13px;
+      font-weight: 500;
+      text-align: center;
+      letter-spacing: 0.01em;
+    }
+    .update-bar code {
+      background: rgba(255, 255, 255, 0.18);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: var(--font-mono, ui-monospace, monospace);
+      font-weight: 600;
+      margin-left: 6px;
+      user-select: all;
+    }
     .flash.warn { background: var(--color-warn-bg);       color: #78350F; border-color: rgba(180, 83, 9, 0.2); }
     .flash.bad  { background: var(--color-destructive-bg); color: #7F1D1D; border-color: rgba(220, 38, 38, 0.2); }
     .flash::before {
@@ -379,6 +401,11 @@
   </style>
 </head>
 <body>
+  {% if update_available %}
+  <div class="update-bar">
+    An update is available. Run <code>{{ update_command }}</code> in your terminal to install it.
+  </div>
+  {% endif %}
   <header class="bar">
     <a class="brand" href="/">Grader Form v2</a>
     <nav>
