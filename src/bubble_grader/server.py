@@ -15,6 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import db as dbmod
 from .classroom import (
     create_coursework,
+    delete_coursework,
     list_courses,
     list_coursework,
     list_roster,
@@ -394,6 +395,32 @@ async def assignment_release(
         verb = "released" if return_to_student else "set to draft"
         _flash(request, "ok", f"{ok} grade(s) {verb} for selected students.")
     return RedirectResponse(f"/courses/{course_id}/coursework/{cw_id}", status_code=303)
+
+
+@app.post("/courses/{course_id}/coursework/{cw_id}/delete")
+def assignment_delete(request: Request, course_id: str, cw_id: str):
+    email = _require(request)
+    if isinstance(email, RedirectResponse):
+        return email
+
+    # Only assignments our app created can be deleted via the Classroom API.
+    if dbmod.get_app_assignment(course_id, cw_id) is None:
+        _flash(
+            request, "bad",
+            "This assignment wasn't created by Grader Form, so Classroom's API "
+            "won't let us delete it. Delete it from the Classroom web UI directly.",
+        )
+        return RedirectResponse(f"/courses/{course_id}/coursework/{cw_id}", status_code=303)
+
+    try:
+        delete_coursework(email, course_id, cw_id)
+    except Exception as e:  # noqa: BLE001
+        _flash(request, "bad", f"Classroom delete failed: {type(e).__name__}: {e}")
+        return RedirectResponse(f"/courses/{course_id}/coursework/{cw_id}", status_code=303)
+
+    n = dbmod.delete_app_assignment(course_id, cw_id)
+    _flash(request, "ok", f"Assignment deleted (and {n} local row(s) cleaned up).")
+    return RedirectResponse(f"/courses/{course_id}", status_code=303)
 
 
 @app.post("/courses/{course_id}/coursework/{cw_id}/feedback")

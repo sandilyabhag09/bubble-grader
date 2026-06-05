@@ -111,6 +111,25 @@
     {% endif %}
   </div>
 
+  <div class="card" style="border-color: rgba(220, 38, 38, 0.3);">
+    <h3 style="color: var(--color-destructive);">Danger zone</h3>
+    {% if cw.is_app_owned %}
+      <form method="post" action="/courses/{{ course.id }}/coursework/{{ cw.id }}/delete"
+            onsubmit="return confirm('Delete this assignment from Google Classroom AND remove all its local grades? This cannot be undone.')">
+        <p class="muted" style="margin-top: 0;">
+          Removes the assignment from Classroom and wipes its local submission rows.
+          Student work in Drive is not touched.
+        </p>
+        <button class="btn danger" type="submit">Delete this assignment</button>
+      </form>
+    {% else %}
+      <p class="muted" style="margin: 0;">
+        This assignment wasn't created by Grader Form, so Classroom's API won't let us delete it.
+        Delete it from the Classroom web UI directly.
+      </p>
+    {% endif %}
+  </div>
+
 <script>
   // Client-side filter: match name + email columns. Hides rows that don't match.
   function filterStudents(q) {

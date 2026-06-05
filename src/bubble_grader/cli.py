@@ -7,6 +7,7 @@ import click
 
 from .classroom import (
     create_coursework,
+    delete_coursework,
     list_courses,
     list_coursework,
     list_roster,
@@ -81,33 +82,75 @@ def cmd_load_shared_tests() -> None:
     click.echo(f"\n{n_loaded} loaded · {n_skipped} already present.")
 
 
+_TARBALL_URL = "https://github.com/sandilyabhag09/bubble-grader/archive/refs/heads/main.tar.gz"
+
+
+def _update_via_tarball(project_root: Path) -> None:
+    """Overlay the latest GitHub tarball onto the project tree, preserving local state."""
+    import shutil
+    import tarfile
+    import tempfile
+    import urllib.request
+
+    click.echo("Downloading latest code…")
+    with tempfile.TemporaryDirectory() as tmp:
+        tar_path = f"{tmp}/main.tar.gz"
+        urllib.request.urlretrieve(_TARBALL_URL, tar_path)
+        with tarfile.open(tar_path) as tar:
+            tar.extractall(tmp)
+        extracted = Path(tmp) / "bubble-grader-main"
+        if not extracted.exists():
+            raise click.ClickException(
+                "Tarball missing expected top-level directory; aborting."
+            )
+        # Code + shared assets. NEVER touch secrets/, .env, DB, or submissions.
+        for rel in ("src", "pyproject.toml", "uv.lock", ".gitignore", ".env.example"):
+            src = extracted / rel
+            if not src.exists():
+                continue
+            dst = project_root / rel
+            if src.is_dir():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+        for sub in ("data/sheets", "data/scoring"):
+            src = extracted / sub
+            if not src.exists():
+                continue
+            dst = project_root / sub
+            dst.mkdir(parents=True, exist_ok=True)
+            for f in src.iterdir():
+                if f.is_file():
+                    shutil.copy2(f, dst / f.name)
+
+
 @cli.command("update")
 def cmd_update() -> None:
     """Pull the latest code from GitHub and re-sync dependencies.
 
-    Run this when the project maintainer says they've shipped a new feature.
-    Safe to run anytime — it never touches your local DB, OAuth tokens, or
-    secrets directory.
+    Works whether the install was via `git clone` or via the tarball download.
+    Never touches your local DB, OAuth tokens, secrets/, or student submissions.
     """
     import shutil
     import subprocess
     from .config import PROJECT_ROOT
 
-    if not (PROJECT_ROOT / ".git").exists():
-        click.echo("Not a git checkout — `bubble-grader update` only works when "
-                   "the project was installed via `git clone`. Skipping.")
-        raise click.exceptions.Exit(1)
-
-    click.echo("Fetching latest code…")
-    try:
-        out = subprocess.check_output(
-            ["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only"],
-            stderr=subprocess.STDOUT, text=True,
-        )
-        click.echo(out.strip())
-    except subprocess.CalledProcessError as e:
-        click.echo(f"git pull failed:\n{e.output}")
-        raise click.exceptions.Exit(1)
+    used_git = (PROJECT_ROOT / ".git").exists() and shutil.which("git") is not None
+    if used_git:
+        click.echo("Fetching via git…")
+        try:
+            out = subprocess.check_output(
+                ["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only"],
+                stderr=subprocess.STDOUT, text=True,
+            )
+            click.echo(out.strip())
+        except subprocess.CalledProcessError as e:
+            click.echo(f"git pull failed:\n{e.output}")
+            raise click.exceptions.Exit(1)
+    else:
+        _update_via_tarball(PROJECT_ROOT)
 
     if not shutil.which("uv"):
         click.echo("uv not on PATH; skipping dependency sync. Run `uv sync` manually.")
@@ -904,6 +947,32 @@ def cmd_send_feedback(
             for line in r["body"].splitlines():
                 click.echo(f"       {line}")
             click.echo("       ------------")
+
+
+@assignment_group.command("delete")
+@click.argument("email")
+@click.argument("course_id")
+@click.argument("cw_id")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
+def cmd_assignment_delete(email: str, course_id: str, cw_id: str, yes: bool) -> None:
+    """Delete a Classroom assignment + its local grading data.
+
+    Only works on assignments created via `assignment create` — Classroom's API
+    rejects deletes of coursework made in the Classroom web UI.
+    """
+    if dbmod.get_app_assignment(course_id, cw_id) is None:
+        raise click.ClickException(
+            "Not in app_assignments — Classroom will reject this delete. "
+            "Delete it from the Classroom web UI instead."
+        )
+    if not yes:
+        click.confirm(
+            f"Delete coursework {cw_id} from Classroom AND its local submission rows?",
+            abort=True,
+        )
+    delete_coursework(email, course_id, cw_id)
+    n = dbmod.delete_app_assignment(course_id, cw_id)
+    click.echo(f"Deleted. ({n} local row(s) cleaned up.)")
 
 
 @cli.command("release-grades")
