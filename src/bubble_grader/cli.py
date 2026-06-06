@@ -176,6 +176,16 @@ def cmd_update() -> None:
         return
     click.echo("\nSyncing dependencies…")
     subprocess.check_call(["uv", "sync"], cwd=str(PROJECT_ROOT))
+
+    # Pull any new/renamed shared tests into the local DB so they appear in
+    # the Tests dropdown immediately. `load-shared-tests` is a no-op when
+    # nothing has changed, so this is safe to run every time.
+    click.echo("\nLoading shared tests…")
+    try:
+        cmd_load_shared_tests.callback()
+    except Exception as e:  # noqa: BLE001 — never fail the update because of import quirks
+        click.echo(f"  (skipped: {e})")
+
     click.echo("\n✓ Updated. Restart the server to pick up changes.")
 
 
