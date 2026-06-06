@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="crumbs"><a href="/dashboard">Courses</a> / {{ course.name }}</div>
+  <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
+    <h1>{{ course.name }}</h1>
+    <a class="btn" href="/courses/{{ course.id }}/new">+ New assignment</a>
+  </div>
+
+  <nav class="tabs">
+    <a class="tab" href="/courses/{{ course.id }}">Assignments</a>
+    <a class="tab active" href="/courses/{{ course.id }}/roster">Roster</a>
+  </nav>
+
+  <div class="card">
+    <h3>Roster <span class="muted" style="font-weight: 400;">({{ roster|length }} {% if roster|length == 1 %}student{% else %}students{% endif %})</span></h3>
+    {% if not roster %}
+      <p class="muted">No students enrolled in this course.</p>
+    {% else %}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Most recent test</th>
+            <th>Composite</th>
+            <th>Submitted</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in roster %}
+          <tr>
+            <td>
+              <a href="/courses/{{ course.id }}/students/{{ s.id }}" style="font-weight: 500;">
+                {{ s.name }}
+              </a>
+            </td>
+            <td class="muted">{{ s.email or "—" }}</td>
+            <td>
+              {% if s.latest %}
+                <code>{{ s.latest.test_id }}</code>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if s.latest and s.latest.composite is not none %}
+                <strong>{{ s.latest.composite }}</strong>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td class="muted">
+              {% if s.latest %}{{ s.latest.created_at }}{% else %}—{% endif %}
+            </td>
+            <td>
+              <a class="btn secondary" href="/courses/{{ course.id }}/students/{{ s.id }}">
+                View &rarr;
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+{% endblock %}

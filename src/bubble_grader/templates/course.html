@@ -6,6 +6,11 @@
     <a class="btn" href="/courses/{{ course.id }}/new">+ New assignment</a>
   </div>
 
+  <nav class="tabs">
+    <a class="tab active" href="/courses/{{ course.id }}">Assignments</a>
+    <a class="tab" href="/courses/{{ course.id }}/roster">Roster</a>
+  </nav>
+
   <div class="card">
     <h3>Assignments</h3>
     {% if not coursework %}

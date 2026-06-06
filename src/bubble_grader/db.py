@@ -379,12 +379,24 @@ def list_submissions(
     student_id: str | None = None,
     course_id: str | None = None,
     coursework_id: str | None = None,
+    *,
+    include_score: bool = False,
 ) -> list[dict]:
-    sql = (
-        "SELECT id, test_id, student_id, student_name, student_email, "
-        "course_id, coursework_id, classroom_submission_id, composite, created_at "
-        "FROM submissions"
+    """List submissions filtered by any combination of the provided keys.
+
+    When ``include_score=True``, also fetches and parses the per-section
+    ``score_json`` blob into a ``score`` dict on each row. This is the
+    full ``full_grade`` output: ``{"sections": {"Test 1": {...}, ...},
+    "composite": int}``. Use this for roster averages where you need
+    raw + scaled per section.
+    """
+    cols = (
+        "id, test_id, student_id, student_name, student_email, "
+        "course_id, coursework_id, classroom_submission_id, composite, created_at"
     )
+    if include_score:
+        cols += ", score_json"
+    sql = f"SELECT {cols} FROM submissions"
     args: list = []
     where: list[str] = []
     if test_id is not None:
@@ -403,7 +415,15 @@ def list_submissions(
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY created_at DESC"
     with get_conn() as conn:
-        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+        rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+    if include_score:
+        for r in rows:
+            sj = r.pop("score_json", None)
+            try:
+                r["score"] = json.loads(sj) if sj else None
+            except (json.JSONDecodeError, TypeError):
+                r["score"] = None
+    return rows
 
 
 def update_submission(

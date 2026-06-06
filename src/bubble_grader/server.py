@@ -185,6 +185,116 @@ def course_view(request: Request, course_id: str):
     return _render(request, "course.html", course=course, coursework=coursework)
 
 
+# ----- roster view ----------------------------------------------------------
+
+def _resolve_course(email: str, course_id: str) -> dict:
+    """Lookup-or-404 helper used by every course-scoped route."""
+    course = next((c for c in list_courses(email) if c["id"] == course_id), None)
+    if course is None:
+        raise HTTPException(404, "Course not found in your active courses.")
+    return course
+
+
+def _normalize_roster(roster_raw: list[dict]) -> list[dict]:
+    """Flatten the Classroom roster API shape into {id, name, email}."""
+    out = []
+    for r in roster_raw:
+        prof = r.get("profile") or {}
+        sid = prof.get("id") or r.get("userId")
+        name = (prof.get("name") or {}).get("fullName") or prof.get("emailAddress") or "?"
+        out.append({
+            "id": sid,
+            "name": name,
+            "email": prof.get("emailAddress"),
+        })
+    out.sort(key=lambda s: s["name"].lower())
+    return out
+
+
+@app.get("/courses/{course_id}/roster", response_class=HTMLResponse)
+def course_roster(request: Request, course_id: str):
+    email = _require(request)
+    if isinstance(email, RedirectResponse):
+        return email
+    course = _resolve_course(email, course_id)
+    roster = _normalize_roster(list_roster(email, course_id))
+    subs = dbmod.list_submissions(course_id=course_id)
+    # Map student → most recent submission (list is already ORDER BY created_at DESC).
+    latest_by_student: dict[str, dict] = {}
+    for s in subs:
+        sid = s.get("student_id")
+        if sid and sid not in latest_by_student:
+            latest_by_student[sid] = s
+    for student in roster:
+        student["latest"] = latest_by_student.get(student["id"])
+    return _render(
+        request, "roster.html",
+        course=course, roster=roster,
+    )
+
+
+@app.get(
+    "/courses/{course_id}/students/{student_id}",
+    response_class=HTMLResponse,
+)
+def course_student_detail(request: Request, course_id: str, student_id: str):
+    email = _require(request)
+    if isinstance(email, RedirectResponse):
+        return email
+    course = _resolve_course(email, course_id)
+    # Find the student in the roster (for the name / email at the top).
+    roster = _normalize_roster(list_roster(email, course_id))
+    student = next((s for s in roster if s["id"] == student_id), None)
+    if student is None:
+        raise HTTPException(404, "Student not found in this course's roster.")
+
+    subs = dbmod.list_submissions(
+        course_id=course_id, student_id=student_id, include_score=True,
+    )
+
+    # For each submission: pull per-section raw + scaled out of `score`.
+    # The full_grade output is { "sections": {"Test 1": {raw_score, scaled, ...}, ...},
+    #                            "composite": int }.
+    section_names = ["Test 1", "Test 2", "Test 3", "Test 4"]
+    rows = []
+    for s in subs:
+        sc = s.get("score") or {}
+        secs = sc.get("sections") or {}
+        per_section = {}
+        for sec in section_names:
+            d = secs.get(sec) or {}
+            per_section[sec] = {
+                "raw": d.get("raw_score"),
+                "scaled": d.get("scaled"),
+            }
+        rows.append({
+            "id": s["id"],
+            "test_id": s["test_id"],
+            "created_at": s["created_at"],
+            "composite": s.get("composite"),
+            "coursework_id": s.get("coursework_id"),
+            "sections": per_section,
+        })
+
+    # Averages — across submissions, per section, for raw and scaled.
+    def _avg(values: list[float | int | None]) -> float | None:
+        vals = [v for v in values if isinstance(v, (int, float))]
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    averages = {"composite": _avg([r["composite"] for r in rows])}
+    for sec in section_names:
+        averages[sec] = {
+            "raw": _avg([r["sections"][sec]["raw"] for r in rows]),
+            "scaled": _avg([r["sections"][sec]["scaled"] for r in rows]),
+        }
+
+    return _render(
+        request, "student_course_detail.html",
+        course=course, student=student, rows=rows,
+        averages=averages, section_names=section_names,
+    )
+
+
 # ----- create assignment ----------------------------------------------------
 
 @app.get("/courses/{course_id}/new", response_class=HTMLResponse)

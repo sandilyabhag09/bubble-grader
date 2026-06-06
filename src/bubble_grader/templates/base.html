@@ -213,6 +213,30 @@
     .card > h3:first-child { margin-top: 0; }
 
     /* ---- Crumbs ---- */
+    /* Tab bar for switching views within a single page (e.g. course
+       Assignments ↔ Roster). Inactive tabs are muted text; the active
+       tab gets the accent underline. */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--color-border);
+      margin: 0 0 20px;
+    }
+    .tabs .tab {
+      padding: 10px 18px;
+      color: var(--color-fg-muted);
+      text-decoration: none;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color 120ms ease, border-color 120ms ease;
+    }
+    .tabs .tab:hover { color: var(--color-fg); }
+    .tabs .tab.active {
+      color: var(--color-fg);
+      border-bottom-color: var(--color-accent);
+    }
+
     .crumbs {
       font-size: 13px;
       color: var(--color-fg-subtle);
