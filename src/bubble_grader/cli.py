@@ -1,6 +1,7 @@
 """CLI: bubble-grader admin + sheet generation + OMR commands."""
 
 import json
+import sys
 from pathlib import Path
 
 import click
@@ -311,6 +312,110 @@ def cmd_teachers() -> None:
     """List teachers with stored credentials."""
     for t in list_teachers():
         click.echo(t)
+
+
+@cli.command("migrate-to-postgres")
+@click.option("--dry-run", is_flag=True, help="Read everything but don't write to Postgres.")
+def cmd_migrate_to_postgres(dry_run: bool) -> None:
+    """One-time copy of local SQLite data to the Postgres DATABASE_URL.
+
+    Run this AFTER setting DATABASE_URL in .env and confirming the schema
+    is in place (call ``setup`` first — it creates tables for whichever
+    backend is configured). Safe to re-run: each table is upserted by
+    primary key so duplicate inserts are quietly skipped.
+    """
+    import os
+    import sqlite3 as _sqlite
+
+    from .config import DB_PATH
+
+    db_url = os.environ.get("DATABASE_URL", "").strip()
+    if not db_url:
+        click.echo("DATABASE_URL is not set. Add it to .env first, then re-run.")
+        sys.exit(1)
+
+    src_path = Path(DB_PATH)
+    if not src_path.exists():
+        click.echo(f"No local SQLite database at {src_path}. Nothing to migrate.")
+        sys.exit(1)
+
+    # Connect to source (SQLite) and target (Postgres) directly — bypassing
+    # the backend wrapper so we can read from one and write to the other in
+    # the same process.
+    src = _sqlite.connect(src_path)
+    src.row_factory = _sqlite.Row
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    dst = psycopg.connect(db_url, row_factory=dict_row)
+    dst_cur = dst.cursor()
+
+    # Make sure the destination has the schema. Calling init_db() does
+    # this for whichever backend is active — DATABASE_URL is set, so it
+    # picks Postgres.
+    from . import db as dbmod
+    dbmod.init_db()
+
+    tables = [
+        ("teachers", "email"),
+        ("oauth_states", "state"),
+        ("tests", "id"),
+        ("app_assignments", ("course_id", "coursework_id")),
+        ("submissions", "id"),
+    ]
+
+    totals = {}
+    for table, pk in tables:
+        rows = list(src.execute(f"SELECT * FROM {table}"))
+        if not rows:
+            click.echo(f"  {table}: empty")
+            totals[table] = 0
+            continue
+        cols = list(rows[0].keys())
+        placeholders = ", ".join(["%s"] * len(cols))
+        col_list = ", ".join(cols)
+        if isinstance(pk, tuple):
+            pk_list = ", ".join(pk)
+        else:
+            pk_list = pk
+        sql = (
+            f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
+            f"ON CONFLICT ({pk_list}) DO NOTHING"
+        )
+        n_ok = 0
+        for r in rows:
+            values = tuple(r[c] for c in cols)
+            if dry_run:
+                n_ok += 1
+                continue
+            try:
+                dst_cur.execute(sql, values)
+                n_ok += 1
+            except Exception as e:  # noqa: BLE001
+                click.echo(f"  ! {table} row {dict(r).get(pk if isinstance(pk, str) else pk[0])}: {e}")
+        if not dry_run:
+            dst.commit()
+        click.echo(f"  {table}: {n_ok}/{len(rows)} rows migrated")
+        totals[table] = n_ok
+
+    # For the submissions table specifically, the SERIAL sequence on the
+    # destination needs to be advanced past the highest id we just inserted
+    # so future INSERTs don't collide. SQLite's autoincrement ids are
+    # preserved by our copy.
+    if not dry_run and totals.get("submissions", 0) > 0:
+        dst_cur.execute(
+            "SELECT setval(pg_get_serial_sequence('submissions','id'), "
+            "(SELECT MAX(id) FROM submissions))"
+        )
+        dst.commit()
+        click.echo("  · submissions id sequence advanced past migrated rows")
+
+    src.close()
+    dst.close()
+
+    click.echo("\n✓ Migration complete." if not dry_run else "\n✓ Dry-run complete (no rows written).")
+    click.echo("Restart your server so it picks up DATABASE_URL: uv run bubble-grader serve")
 
 
 @cli.command("courses")

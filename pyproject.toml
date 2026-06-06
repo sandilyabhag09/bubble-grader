@@ -18,6 +18,10 @@ dependencies = [
     # teacher Macs still get a precompiled wheel and don't try to build.
     "opencv-python>=4.10,<4.11",
     "pillow>=12.2.0",
+    # psycopg's `[binary]` extra ships a precompiled libpq so the teacher
+    # doesn't need PostgreSQL client libs installed. Only used when
+    # DATABASE_URL is set; SQLite is still the local-only fallback.
+    "psycopg[binary]>=3.2.0",
     "pypdf>=6.12.2",
     "pypdfium2>=5.9.0",
     "pytesseract>=0.3.13",

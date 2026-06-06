@@ -1,105 +1,23 @@
-"""SQLite-backed credential store with Fernet encryption."""
+"""Credential + grading store.
+
+Backed by SQLite by default. If the ``DATABASE_URL`` environment variable
+is set, talks to that Postgres instance instead, sharing all state across
+machines (teacher + admin). See ``db_backend.py`` for the abstraction.
+"""
 
 import json
-import sqlite3
-from contextlib import contextmanager
 
 from cryptography.fernet import Fernet
 
-from .config import DB_PATH, FERNET_KEY
-
-
-@contextmanager
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+from .config import FERNET_KEY
+from .db_backend import get_conn, ddl_statements, is_postgres
 
 
 def init_db() -> None:
+    """Create tables + indexes if missing. Safe to call repeatedly."""
     with get_conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS teachers (
-                email TEXT PRIMARY KEY,
-                encrypted_credentials BLOB NOT NULL,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS oauth_states (
-                state TEXT PRIMARY KEY,
-                code_verifier TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-        # ACT practice tests + their answer keys + raw-to-scale conversion tables.
-        # Stored as JSON blobs keyed by section name to keep the schema flexible
-        # if section counts vary across test formats (classic vs new ACT).
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tests (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                notes TEXT,
-                answer_key_json TEXT,
-                scaler_json TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-        # One row per graded student submission. Composite is denormalized for
-        # easy ranking queries; the full per-section breakdown lives in score_json.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                test_id TEXT NOT NULL,
-                student_id TEXT,
-                student_name TEXT,
-                student_email TEXT,
-                course_id TEXT,
-                coursework_id TEXT,
-                classroom_submission_id TEXT,
-                answers_json TEXT,
-                score_json TEXT,
-                composite INTEGER,
-                created_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_submissions_test ON submissions(test_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id)"
-        )
-        # Tracks which Classroom assignments WE created via the app — Google only
-        # lets the creating OAuth project patch grades, so we use this to flag
-        # which assignments are write-eligible in the UI.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_assignments (
-                course_id TEXT NOT NULL,
-                coursework_id TEXT NOT NULL,
-                test_id TEXT,
-                title TEXT,
-                created_by TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (course_id, coursework_id)
-            )
-            """
-        )
+        for stmt in ddl_statements():
+            conn.execute(stmt)
 
 
 def _fernet() -> Fernet:
