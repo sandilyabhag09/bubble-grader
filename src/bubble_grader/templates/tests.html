@@ -17,7 +17,7 @@
           {% for t in tests %}
           <tr>
             <td><code>{{ t.id }}</code></td>
-            <td>{{ t.name }}<div class="muted">{{ t.notes or "" }}</div></td>
+            <td>{{ t.name }}{% if t.format == 'new' %} <span class="pill new">NEW</span>{% endif %}<div class="muted">{{ t.notes or "" }}</div></td>
             <td>{% if t.has_key %}<span class="pill ok">{{ t.key_count }} qs</span>{% else %}<span class="pill bad">missing</span>{% endif %}</td>
             <td>{% if t.has_scaler %}<span class="pill ok">{{ t.scaler_count }} rows</span>{% else %}<span class="pill bad">missing</span>{% endif %}</td>
             <td>

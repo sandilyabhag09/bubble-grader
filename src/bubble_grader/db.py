@@ -171,17 +171,48 @@ def upsert_test(test_id: str, name: str, notes: str | None = None) -> None:
 
 
 def list_tests() -> list[dict]:
+    """All tests with metadata. Also tags each test as 'new'/'legacy' format
+    based on the English section's question count — new-format ACT has
+    ≤ 50 English questions, legacy has 75. Test 1 (English) is the most
+    reliable section to key off because its count differs most between
+    the two formats and is always present.
+    """
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT id, name, notes,
+            SELECT id, name, notes, answer_key_json, scaler_json,
                    answer_key_json IS NOT NULL AS has_key,
                    scaler_json IS NOT NULL AS has_scaler,
                    created_at, updated_at
             FROM tests ORDER BY id
             """
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        akj = d.pop("answer_key_json", None)
+        scj = d.pop("scaler_json", None)
+        d["format"] = None
+        d["key_count"] = None
+        if akj:
+            try:
+                key = json.loads(akj)
+                eng = key.get("Test 1") or {}
+                d["key_count"] = sum(len(v) for v in key.values() if isinstance(v, dict))
+                # 50 or fewer scored English questions = new format
+                d["format"] = "new" if len(eng) <= 50 else "legacy"
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+        if scj:
+            try:
+                sc = json.loads(scj)
+                d["scaler_count"] = sum(len(v) for v in sc.values() if isinstance(v, dict))
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                d["scaler_count"] = None
+        else:
+            d["scaler_count"] = None
+        out.append(d)
+    return out
 
 
 def get_test(test_id: str) -> dict | None:

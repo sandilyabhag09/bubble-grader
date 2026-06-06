@@ -675,20 +675,9 @@ def tests_view(request: Request):
     email = _require(request)
     if isinstance(email, RedirectResponse):
         return email
-    raw = dbmod.list_tests()
-    tests = []
-    for t in raw:
-        full = dbmod.get_test(t["id"])
-        tests.append({
-            "id": t["id"],
-            "name": t["name"],
-            "notes": t["notes"],
-            "has_key": bool(full and full.get("answer_key")),
-            "has_scaler": bool(full and full.get("scaler")),
-            "key_count": sum(len(v) for v in (full.get("answer_key") or {}).values()) if full else 0,
-            "scaler_count": sum(len(v) for v in (full.get("scaler") or {}).values()) if full else 0,
-        })
-    return _render(request, "tests.html", tests=tests)
+    # `list_tests()` already returns has_key, has_scaler, key_count,
+    # scaler_count, and the new-format flag — no per-test follow-up queries.
+    return _render(request, "tests.html", tests=dbmod.list_tests())
 
 
 @app.post("/tests/new")

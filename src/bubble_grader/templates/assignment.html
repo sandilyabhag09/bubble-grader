@@ -22,7 +22,7 @@
       <select name="test_id" required style="max-width: 420px;">
         {% if not assigned_test_id %}<option value="">— pick a test —</option>{% endif %}
         {% for t in tests %}
-          <option value="{{ t.id }}" {% if t.id == assigned_test_id %}selected{% endif %}>{{ t.name }}</option>
+          <option value="{{ t.id }}" {% if t.id == assigned_test_id %}selected{% endif %}>{% if t.format == 'new' %}[NEW] {% endif %}{{ t.name }}</option>
         {% endfor %}
       </select>
       {% if not tests %}

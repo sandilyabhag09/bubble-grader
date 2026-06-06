@@ -14,7 +14,7 @@
       <select name="test_id">
         <option value="">— pick a saved test —</option>
         {% for t in tests %}
-          <option value="{{ t.id }}">{{ t.name }} ({{ t.id }})</option>
+          <option value="{{ t.id }}">{% if t.format == 'new' %}[NEW] {% endif %}{{ t.name }} ({{ t.id }})</option>
         {% endfor %}
       </select>
       <p class="muted">Adding tests: see <a href="/tests">Tests</a>.</p>
