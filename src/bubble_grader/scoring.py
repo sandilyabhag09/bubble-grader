@@ -117,13 +117,20 @@ def grade_answers(
         if q not in q_meta:
             continue
         section, q_in_test = q_meta[q]
+        # Lookup tolerates both string-keyed (DB) and int-keyed dicts.
+        section_key = key.get(section, {}) if isinstance(key, dict) else {}
+        correct = section_key.get(q_in_test) or section_key.get(str(q_in_test))
+        if correct is None:
+            # Question isn't in this test's answer key. Happens for
+            # new-format tests scanned on the legacy 75/60/40/40 bubble
+            # sheet — rows past the test's actual question count have no
+            # correct answer to compare against, so skip entirely rather
+            # than miscount blanks or mark stray marks as wrong.
+            continue
         sec = sections.setdefault(
             section,
             {"n_correct": 0, "n_incorrect": 0, "n_blank": 0, "n_multi": 0, "details": []},
         )
-        # Lookup tolerates both string-keyed (DB) and int-keyed dicts.
-        section_key = key.get(section, {}) if isinstance(key, dict) else {}
-        correct = section_key.get(q_in_test) or section_key.get(str(q_in_test))
 
         given_norm = given.upper() if isinstance(given, str) else given
         if given_norm == "BLANK":
