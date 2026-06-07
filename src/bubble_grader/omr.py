@@ -52,8 +52,15 @@ def _load_grayscale(path: Path | str, pdf_dpi: int = 300) -> np.ndarray:
 # pre-printed letter ink), so a blank bubble reads ≈ 0 and even a light pencil
 # mark cleanly clears MIN_FILL. AMBIGUOUS_REL rescues high-baseline scans where
 # every bubble reads a touch dark but one bubble still stands out proportionally.
-MIN_FILL = 0.04           # below this adjusted ratio → BLANK
-AMBIGUOUS_DELTA = 0.03    # absolute gap between top and runner-up
+MIN_FILL = 0.10           # below this adjusted ratio → BLANK
+                          # was 0.04; raised after the OMR was reporting
+                          # false-positive fills on visibly empty bubbles
+                          # (scan noise + light printed-letter density
+                          # could nudge an unmarked bubble past 0.04).
+AMBIGUOUS_DELTA = 0.05    # absolute gap between top and runner-up
+                          # was 0.03; raised in tandem with MIN_FILL so a
+                          # narrowly-edging top option can't commit when
+                          # both top and runner-up are weakly marked.
 AMBIGUOUS_REL = 0.25      # OR relative gap (top - second)/top
 SAMPLE_SHRINK = 0.70      # sample inside this fraction of the printed radius
 

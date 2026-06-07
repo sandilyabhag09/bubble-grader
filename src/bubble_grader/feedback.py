@@ -40,9 +40,24 @@ DEFAULT_TEMPLATE = Path("data/sheets/act_sheet.template.json")
 DEFAULT_REFERENCE = Path("data/sheets/act_sheet.reference.png")
 
 
-def build_report(submission: dict, test_name: str | None = None) -> str:
-    """Format a feedback report body from a submission's score data."""
+def build_report(
+    submission: dict,
+    test_name: str | None = None,
+    scope: dict | None = None,
+) -> str:
+    """Format a feedback report body from a submission's score data.
+
+    When ``scope`` is a partial-scope dict, the email is rewritten to
+    focus on the assigned passage/question range rather than dumping every
+    section's scaled score and missed-question list.
+    """
     score = submission.get("score") or {}
+
+    # ----- partial scope ---------------------------------------------------
+    if scope and scope.get("type") == "partial":
+        return _build_partial_report(submission, test_name=test_name, scope=scope)
+
+    # ----- full scope (existing layout) -----------------------------------
     sections = score.get("sections") or {}
     composite = score.get("composite")
 
@@ -58,7 +73,7 @@ def build_report(submission: dict, test_name: str | None = None) -> str:
             continue
         display = SECTION_DISPLAY.get(key, key)
         scaled = info.get("scaled_score")
-        score_str = str(scaled) if scaled is not None else "—"
+        score_str = f"{scaled}/36 scaled" if scaled is not None else "—"
         missed = sorted(
             d["q_in_test"] for d in info.get("details", [])
             if d.get("status") in ("incorrect", "blank", "multi")
@@ -67,6 +82,66 @@ def build_report(submission: dict, test_name: str | None = None) -> str:
         lines.append(f"{display}: {score_str}, Missed questions: {missed_str}")
 
     return "\n".join(lines)
+
+
+# Map of internal section key ("Test 1"..) → human label for emails.
+_SECTION_FULL = {
+    "Test 1": "English",
+    "Test 2": "Mathematics",
+    "Test 3": "Reading",
+    "Test 4": "Science",
+}
+
+
+def _build_partial_report(
+    submission: dict,
+    *,
+    test_name: str | None,
+    scope: dict,
+) -> str:
+    """Compact email body for partial-scope assignments.
+
+    Matches the teacher's requested phrasing:
+        On {label} (questions a-b) in {Section} for {test name},
+        you scored {raw}/{total} ({pct}%).
+        Missed questions: ...
+    """
+    score = submission.get("score") or {}
+    partial = score.get("partial") or {}
+    sections = score.get("sections") or {}
+
+    section_key = scope.get("section") or ""
+    section_name = _SECTION_FULL.get(section_key, section_key)
+    q_start = int(scope.get("q_start", 0))
+    q_end = int(scope.get("q_end", 0))
+    label = scope.get("label") or f"questions {q_start}–{q_end}"
+    test_label = test_name or score.get("test_form") or "ACT Practice Test"
+
+    raw = partial.get("raw")
+    total = partial.get("total") or max(0, q_end - q_start + 1)
+    pct = partial.get("percent")
+
+    # Missed questions within the scope range only.
+    sec_info = sections.get(section_key) or {}
+    missed = sorted(
+        d["q_in_test"] for d in sec_info.get("details", [])
+        if (d.get("status") in ("incorrect", "blank", "multi")
+            and q_start <= d.get("q_in_test", 0) <= q_end)
+    )
+    missed_str = ", ".join(str(q) for q in missed) if missed else "none"
+
+    score_line = (
+        f"you scored {raw}/{total}" + (f" ({pct}%)" if pct is not None else "")
+        if raw is not None else "your score wasn't computed"
+    )
+
+    return (
+        f"Here are your results from {test_label}:\n"
+        f"\n"
+        f"On {label} (questions {q_start}–{q_end}) in {section_name}, {score_line}.\n"
+        f"\n"
+        f"Missed questions: {missed_str}."
+    )
 
 
 def _student_scan_path(course_id: str, coursework_id: str, student_id: str) -> Path | None:
@@ -147,6 +222,11 @@ def send_feedback_for_assignment(
     template_path = Path(template_path)
     reference_path = Path(reference_path)
 
+    # Look up the assignment's scope (partial vs full) so build_report can
+    # tailor the email body. Missing app_assignments row = treat as full.
+    app_asg = dbmod.get_app_assignment(course_id, coursework_id)
+    scope = (app_asg or {}).get("scope")
+
     # Latest submission per student, optionally filtered by `only_students`.
     rows = dbmod.list_submissions(course_id=course_id, coursework_id=coursework_id)
     latest_per_student: dict[str, dict] = {}
@@ -178,16 +258,16 @@ def send_feedback_for_assignment(
             continue
 
         first = student_name.split()[0] if student_name and student_name != "there" else "there"
-        report = build_report(full, test_name=test_name)
+        report = build_report(full, test_name=test_name, scope=scope)
         body_parts = [f"Hi {first},", "", report]
         if include_overlay:
             body_parts += [
                 "",
-                "Below is a pdf of your test. The system has picked up on the "
-                "answers marked with a green circle. The ones that have not been "
-                "picked up have a red check. IF YOU THINK ANY OF THE QUESTIONS "
-                "WITH A RED CHECK ARE WRONGLY GIVEN, PLEASE REACH OUT TO SAILAJA "
-                "AUNTIE TO GET THE CORRECT SCORE!!",
+                "Attached is a marked-up copy of your scanned answer sheet. Green "
+                "circles show the answers our system detected for you; red Xs "
+                "mark questions where we couldn't tell (blank or multi-marked). "
+                "IF YOU THINK ANY OF THESE ARE WRONG, REACH OUT TO SAILAJA AUNTIE "
+                "TO GET THE CORRECT SCORE!!",
             ]
         if teacher_name:
             body_parts.extend(["", f"— {teacher_name}"])
