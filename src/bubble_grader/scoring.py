@@ -165,6 +165,33 @@ def grade_answers(
     return sections
 
 
+def partial_summary(report: dict, scope: dict) -> dict:
+    """Compute raw / total / percent for the in-scope question range only.
+
+    ``scope`` is the dict stored on app_assignments: it must have
+    ``section`` (one of "Test 1".."Test 4"), ``q_start``, ``q_end``.
+
+    Returns ``{"raw": N, "total": M, "percent": round_to_1_decimal}``
+    where ``raw`` counts in-scope questions marked "correct" and
+    ``total = q_end - q_start + 1``. Questions in the range that don't
+    appear in the answer key (e.g. new-format field-test items) are
+    treated as un-gradeable rather than incorrect — but for the
+    teacher's reporting we still divide by the full range size, so
+    the percent reflects the passage as it was assigned. Toggle this
+    interpretation later if the teacher prefers raw/scorable_total.
+    """
+    section = scope.get("section")
+    qs = int(scope.get("q_start", 1))
+    qe = int(scope.get("q_end", 0))
+    sec_info = (report.get("sections") or {}).get(section) or {}
+    details = sec_info.get("details") or []
+    in_range = [d for d in details if qs <= d.get("q_in_test", 0) <= qe]
+    raw = sum(1 for d in in_range if d.get("status") == "correct")
+    total = max(0, qe - qs + 1)
+    pct = round((raw / total) * 100, 1) if total else 0.0
+    return {"raw": raw, "total": total, "percent": pct}
+
+
 def full_grade(
     answers: dict[int, str],
     template: dict,

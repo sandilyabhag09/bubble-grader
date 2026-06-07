@@ -438,7 +438,7 @@ def assignment_view(request: Request, course_id: str, cw_id: str, test: str | No
     # Roster + locally graded submissions.
     roster = list_roster(email, course_id)
     graded = {r["student_id"]: r for r in dbmod.list_submissions(
-        course_id=course_id, coursework_id=cw_id
+        course_id=course_id, coursework_id=cw_id, include_score=True,
     ) if r.get("student_id")}
 
     rows = []
@@ -448,15 +448,14 @@ def assignment_view(request: Request, course_id: str, cw_id: str, test: str | No
         name = (profile.get("name") or {}).get("fullName")
         emailv = profile.get("emailAddress")
         g = graded.get(sid)
-        score = None
-        if g:
-            full = dbmod.get_submission(g["id"])
-            score = full.get("score") if full else None
+        score = g.get("score") if g else None
+        partial = (score or {}).get("partial") if score else None
         rows.append({
             "student_id": sid,
             "name": name,
             "email": emailv,
             "classroom_state": cls_state.get(sid, "—"),
+            "partial": partial,
             "composite": g.get("composite") if g else None,
             "section_scaled": _section_scaled_summary(score),
             "graded_at": g.get("created_at") if g else None,

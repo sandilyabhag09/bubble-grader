@@ -66,25 +66,37 @@
               </th>
               <th>Student</th>
               <th>State</th>
-              <th>Composite</th>
-              <th>Sections (E/M/R/S)</th>
+              {% if scope and scope.type == 'partial' %}
+                <th>Raw</th>
+                <th>Percent</th>
+              {% else %}
+                <th>Composite</th>
+                <th>Sections (E/M/R/S)</th>
+              {% endif %}
               <th>When</th>
             </tr>
           </thead>
           <tbody>
             {% for r in rows %}
+              {% set is_partial = scope and scope.type == 'partial' %}
+              {% set has_score = (r.partial is not none) if is_partial else (r.composite is not none) %}
               <tr>
                 <td>
                   <input type="checkbox" name="student_ids" value="{{ r.student_id }}"
-                         {% if r.composite is not none %}checked{% else %}disabled title="No graded composite — can't release"{% endif %}>
+                         {% if has_score %}checked{% else %}disabled title="No graded score — can't release"{% endif %}>
                 </td>
                 <td>
                   <a href="/courses/{{ course.id }}/coursework/{{ cw.id }}/students/{{ r.student_id }}" title="Open detail / overrides">{{ r.name or r.student_id }}</a>
                   <div class="muted">{{ r.email or "" }}</div>
                 </td>
                 <td>{{ r.classroom_state or "—" }}</td>
-                <td><strong>{{ r.composite if r.composite is not none else "—" }}</strong></td>
-                <td class="muted">{{ r.section_scaled or "—" }}</td>
+                {% if is_partial %}
+                  <td><strong>{% if r.partial %}{{ r.partial.raw }} / {{ r.partial.total }}{% else %}—{% endif %}</strong></td>
+                  <td class="muted">{% if r.partial %}{{ r.partial.percent }}%{% else %}—{% endif %}</td>
+                {% else %}
+                  <td><strong>{{ r.composite if r.composite is not none else "—" }}</strong></td>
+                  <td class="muted">{{ r.section_scaled or "—" }}</td>
+                {% endif %}
                 <td class="muted">{{ r.graded_at or "—" }}</td>
               </tr>
             {% endfor %}

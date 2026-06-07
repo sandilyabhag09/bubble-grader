@@ -22,7 +22,7 @@ from .classroom import (
 from .config import DATA_DIR
 from .drive import download_file, submission_cache_dir
 from .omr import read_sheet_fm
-from .scoring import full_grade
+from .scoring import full_grade, partial_summary
 
 
 def fetch_assignment(
@@ -140,6 +140,14 @@ def grade_classroom_assignment(
     if not test["answer_key"]:
         raise ValueError(f"Test '{test_id}' has no answer key; use `test set-key`.")
 
+    # Look up the assignment's scope (if any). Full-scope assignments
+    # behave exactly like before; partial-scope ones get a `partial`
+    # block attached to each student's report so release_grades can
+    # write a percentage-of-max to Classroom and the UI can show
+    # raw/total instead of composite.
+    app_asg = dbmod.get_app_assignment(course_id, coursework_id)
+    scope = (app_asg or {}).get("scope")
+
     if refetch:
         manifest = fetch_assignment(
             email, course_id, coursework_id, only_turned_in=only_turned_in
@@ -185,6 +193,8 @@ def grade_classroom_assignment(
             read_result = read_sheet_fm(file_path, template_path, reference_path)
             answers = {int(k): v for k, v in read_result["answers"].items()}
             report = full_grade(answers, template, test["answer_key"], test["scaler"])
+            if scope and scope.get("type") == "partial":
+                report["partial"] = partial_summary(report, scope)
             sub_id = dbmod.add_submission(
                 test_id=test_id,
                 answers=answers,
@@ -254,7 +264,11 @@ def release_grades(
     Returns a per-student outcome list mirroring `grade_classroom_assignment`.
     """
     # Pull the latest submission per student (DB rows are DESC by created_at).
-    rows = dbmod.list_submissions(course_id=course_id, coursework_id=coursework_id)
+    # include_score=True is needed for partial-scope assignments — the
+    # raw/total/percent lives inside score_json, not on a top-level column.
+    rows = dbmod.list_submissions(
+        course_id=course_id, coursework_id=coursework_id, include_score=True,
+    )
     latest_per_student: dict[str, dict] = {}
     for r in rows:
         sid = r["student_id"]
@@ -285,14 +299,28 @@ def release_grades(
         cls_sub_id = r.get("classroom_submission_id")
         name = r.get("student_name") or r.get("student_email") or sid
 
-        if composite is None:
-            results.append({"student_id": sid, "name": name, "status": "no_composite"})
-            continue
-        if not cls_sub_id:
-            results.append({"student_id": sid, "name": name, "status": "no_classroom_submission"})
-            continue
-
-        grade = composite if scale_to is None else (composite / 36.0) * scale_to
+        # Partial-scope assignments override the grade computation: the
+        # raw count / range size becomes the percentage we send to
+        # Classroom (normalized to the assignment's maxPoints). This
+        # path runs whenever the submission's score blob has a
+        # `partial` summary regardless of `scale_to` — the partial
+        # percentage IS the canonical score for these assignments.
+        score = r.get("score") or {}
+        partial = score.get("partial") if isinstance(score, dict) else None
+        if partial and partial.get("total"):
+            mp = max_points or 100  # default to 100 if Classroom didn't tell us
+            grade = (partial["raw"] / partial["total"]) * mp
+            if not cls_sub_id:
+                results.append({"student_id": sid, "name": name, "status": "no_classroom_submission"})
+                continue
+        else:
+            if composite is None:
+                results.append({"student_id": sid, "name": name, "status": "no_composite"})
+                continue
+            if not cls_sub_id:
+                results.append({"student_id": sid, "name": name, "status": "no_classroom_submission"})
+                continue
+            grade = composite if scale_to is None else (composite / 36.0) * scale_to
 
         try:
             patch_grade(
@@ -305,13 +333,13 @@ def release_grades(
                 status = "returned"
             results.append({
                 "student_id": sid, "name": name,
-                "composite": composite, "sent": grade,
+                "composite": composite, "partial": partial, "sent": grade,
                 "status": status,
             })
         except Exception as e:  # noqa: BLE001
             results.append({
                 "student_id": sid, "name": name,
-                "composite": composite, "sent": grade,
+                "composite": composite, "partial": partial, "sent": grade,
                 "status": "release_failed",
                 "error": f"{type(e).__name__}: {e}",
             })
