@@ -61,6 +61,11 @@ class _Cursor:
     def fetchall(self):
         return self._cur.fetchall()
 
+    @property
+    def rowcount(self) -> int:
+        # SQLite and psycopg both expose this — pass it through.
+        return self._cur.rowcount
+
     def __iter__(self) -> Iterator[Any]:
         return iter(self._cur)
 
@@ -234,10 +239,14 @@ DDL_SQLITE = [
         test_id TEXT,
         title TEXT,
         created_by TEXT,
+        scope_json TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         PRIMARY KEY (course_id, coursework_id)
     )
     """,
+    # In-place migration for installs created before scope_json existed.
+    # SQLite silently no-ops if the column already exists IFF we use a
+    # try/except — bare ALTER fails, so we run it via a guard in init_db.
 ]
 
 DDL_POSTGRES = [
@@ -292,6 +301,7 @@ DDL_POSTGRES = [
         test_id TEXT,
         title TEXT,
         created_by TEXT,
+        scope_json TEXT,
         created_at TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (course_id, coursework_id)
     )

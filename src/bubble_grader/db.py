@@ -18,6 +18,27 @@ def init_db() -> None:
     with get_conn() as conn:
         for stmt in ddl_statements():
             conn.execute(stmt)
+        _migrate_add_scope_column(conn)
+
+
+def _migrate_add_scope_column(conn) -> None:
+    """Older installs created app_assignments without scope_json.
+    Add it in place if it's missing — both backends silently no-op when
+    the column already exists, so this is safe to run on every startup.
+    """
+    if conn.is_postgres:
+        sql = (
+            "ALTER TABLE app_assignments "
+            "ADD COLUMN IF NOT EXISTS scope_json TEXT"
+        )
+        conn.execute(sql)
+        return
+    # SQLite: no IF NOT EXISTS support for ALTER ADD COLUMN, so introspect
+    # the current schema and skip if the column is already there.
+    cur = conn.execute("PRAGMA table_info(app_assignments)")
+    cols = {row["name"] if hasattr(row, "keys") else row[1] for row in cur.fetchall()}
+    if "scope_json" not in cols:
+        conn.execute("ALTER TABLE app_assignments ADD COLUMN scope_json TEXT")
 
 
 def _fernet() -> Fernet:
@@ -183,17 +204,29 @@ def record_app_assignment(
     test_id: str | None = None,
     title: str | None = None,
     created_by: str | None = None,
+    scope: dict | None = None,
 ) -> None:
+    """Insert or upsert an app-owned assignment.
+
+    ``scope`` is the partial/full-scope config, serialized to JSON and stored
+    in ``scope_json``. ``None`` means "full scope" — same as today's behavior.
+    The COALESCE update only overwrites fields the caller actually supplied,
+    so passing only ``scope=...`` on re-record won't clobber the title.
+    """
+    scope_json = json.dumps(scope) if scope is not None else None
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO app_assignments (course_id, coursework_id, test_id, title, created_by)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO app_assignments (
+                course_id, coursework_id, test_id, title, created_by, scope_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(course_id, coursework_id) DO UPDATE SET
-                test_id = COALESCE(excluded.test_id, app_assignments.test_id),
-                title = COALESCE(excluded.title, app_assignments.title)
+                test_id    = COALESCE(excluded.test_id, app_assignments.test_id),
+                title      = COALESCE(excluded.title, app_assignments.title),
+                scope_json = COALESCE(excluded.scope_json, app_assignments.scope_json)
             """,
-            (course_id, coursework_id, test_id, title, created_by),
+            (course_id, coursework_id, test_id, title, created_by, scope_json),
         )
 
 
@@ -203,7 +236,15 @@ def get_app_assignment(course_id: str, coursework_id: str) -> dict | None:
             "SELECT * FROM app_assignments WHERE course_id=? AND coursework_id=?",
             (course_id, coursework_id),
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    d = dict(row)
+    sj = d.pop("scope_json", None)
+    try:
+        d["scope"] = json.loads(sj) if sj else None
+    except (json.JSONDecodeError, TypeError):
+        d["scope"] = None
+    return d
 
 
 def delete_app_assignment(

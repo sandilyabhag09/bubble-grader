@@ -19,6 +19,37 @@
       </select>
       <p class="muted">Adding tests: see <a href="/tests">Tests</a>.</p>
 
+      <label>Scope</label>
+      <select name="scope_type" id="scope_type" onchange="onScopeChange()">
+        <option value="full">Full test — grade every section</option>
+        <option value="partial">Partial — single passage / question range</option>
+      </select>
+      <p class="muted">Full scope returns raw + scaled per section + composite. Partial scope returns just the raw score for the selected questions (grading details still being refined).</p>
+
+      <div id="scope_partial" style="display: none; padding: 12px 16px; border: 1px solid var(--color-border); border-radius: 8px; margin: 8px 0 16px;">
+        <label>Section</label>
+        <select name="scope_section">
+          <option value="Test 1">Test 1 — English</option>
+          <option value="Test 3" selected>Test 3 — Reading</option>
+          <option value="Test 4">Test 4 — Science</option>
+          <option value="Test 2">Test 2 — Mathematics (no passages — just a question range)</option>
+        </select>
+
+        <div class="row" style="gap: 12px; align-items: end;">
+          <div style="flex: 1;">
+            <label>First question</label>
+            <input type="number" name="scope_q_start" min="1" placeholder="11">
+          </div>
+          <div style="flex: 1;">
+            <label>Last question</label>
+            <input type="number" name="scope_q_end" min="1" placeholder="20">
+          </div>
+        </div>
+
+        <label>Label (optional, shown on the assignment page)</label>
+        <input type="text" name="scope_label" placeholder="e.g. Passage 2 — Natural Science">
+      </div>
+
       <label>Max points (use 36 so the composite displays naturally)</label>
       <input type="number" name="max_points" value="36" min="1" step="1">
 
@@ -33,4 +64,13 @@
       </div>
     </form>
   </div>
+
+  <script>
+    function onScopeChange() {
+      var t = document.getElementById('scope_type').value;
+      document.getElementById('scope_partial').style.display = (t === 'partial') ? 'block' : 'none';
+    }
+    // run on load in case of back-button restoring "partial"
+    onScopeChange();
+  </script>
 {% endblock %}

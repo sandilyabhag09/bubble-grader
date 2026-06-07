@@ -310,6 +310,40 @@ def new_assignment_form(request: Request, course_id: str):
     return _render(request, "new_assignment.html", course=course, tests=tests)
 
 
+def _parse_scope(
+    scope_type: str,
+    section: str,
+    q_start: str,
+    q_end: str,
+    label: str,
+) -> dict | None:
+    """Translate the new-assignment form's scope fields into a scope dict.
+
+    Returns ``None`` (= full scope) when scope_type is missing or "full".
+    Returns ``{"type": "partial", ...}`` when the partial fields validate.
+    Raises HTTPException(400) when the partial config is malformed so the
+    teacher gets a clear error instead of a silently-stored bad row.
+    """
+    if scope_type != "partial":
+        return None
+    try:
+        qs = int(q_start)
+        qe = int(q_end)
+    except ValueError:
+        raise HTTPException(400, "Question range must be numeric (e.g. 11 to 20).")
+    if qs < 1 or qe < qs:
+        raise HTTPException(400, "Question range is invalid: end must be >= start, both >= 1.")
+    if section not in {"Test 1", "Test 2", "Test 3", "Test 4"}:
+        raise HTTPException(400, "Section must be one of Test 1–4.")
+    return {
+        "type": "partial",
+        "section": section,
+        "q_start": qs,
+        "q_end": qe,
+        "label": (label or "").strip() or None,
+    }
+
+
 @app.post("/courses/{course_id}/new")
 def new_assignment_submit(
     request: Request,
@@ -319,10 +353,16 @@ def new_assignment_submit(
     test_id: str = Form(""),
     max_points: float = Form(36),
     draft: str = Form(""),
+    scope_type: str = Form("full"),
+    scope_section: str = Form(""),
+    scope_q_start: str = Form(""),
+    scope_q_end: str = Form(""),
+    scope_label: str = Form(""),
 ):
     email = _require(request)
     if isinstance(email, RedirectResponse):
         return email
+    scope = _parse_scope(scope_type, scope_section, scope_q_start, scope_q_end, scope_label)
     cw = create_coursework(
         email, course_id, title,
         description=description or None,
@@ -334,6 +374,7 @@ def new_assignment_submit(
         test_id=test_id or None,
         title=title,
         created_by=email,
+        scope=scope,
     )
     _flash(request, "ok", f"Created assignment '{title}'.")
     return RedirectResponse(
@@ -413,6 +454,7 @@ def assignment_view(request: Request, course_id: str, cw_id: str, test: str | No
         course=course, cw=cw,
         tests=tests, assigned_test_id=assigned_test_id,
         rows=rows,
+        scope=(owned.get("scope") if owned else None),
     )
 
 

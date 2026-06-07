@@ -4,13 +4,23 @@
 
   <div class="row" style="justify-content: space-between; margin-bottom: 16px;">
     <div>
-      <h1>{{ cw.title }}</h1>
+      <h1>
+        {{ cw.title }}
+        {% if scope and scope.type == 'partial' %}<span class="pill new" title="Partial-scope assignment">PARTIAL</span>{% endif %}
+      </h1>
       <p class="muted">
         max points: {{ cw.maxPoints or "—" }} ·
         state: {{ cw.state }} ·
         {% if cw.is_app_owned %}<span class="pill ok">app-owned (grades can be released)</span>
         {% else %}<span class="pill warn">created in Classroom UI — grade release via API is blocked by Google</span>{% endif %}
       </p>
+      {% if scope and scope.type == 'partial' %}
+        <p class="muted" style="margin-top: 4px;">
+          <strong>Scope:</strong>
+          {{ scope.section }}, questions {{ scope.q_start }}&ndash;{{ scope.q_end }}
+          {% if scope.label %}— <em>{{ scope.label }}</em>{% endif %}
+        </p>
+      {% endif %}
     </div>
     <a class="btn secondary" target="_blank" href="{{ cw.alternateLink }}">Open in Classroom ↗</a>
   </div>
