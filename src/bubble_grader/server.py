@@ -307,7 +307,21 @@ def new_assignment_form(request: Request, course_id: str):
     if course is None:
         raise HTTPException(404, "Course not found.")
     tests = dbmod.list_tests()
-    return _render(request, "new_assignment.html", course=course, tests=tests)
+    # Pre-compute the passage map: { format: { section: [{q_start, q_end, label}, ...] } }
+    # so the new-assignment form can render the Passage dropdown without
+    # extra round-trips when the teacher switches tests.
+    from .passages import PASSAGES_BY_FORMAT_AND_SECTION
+    passage_map = {
+        fmt: {
+            sec: [{"q_start": s, "q_end": e, "label": label} for (s, e, label) in psgs]
+            for sec, psgs in by_section.items()
+        }
+        for fmt, by_section in PASSAGES_BY_FORMAT_AND_SECTION.items()
+    }
+    return _render(
+        request, "new_assignment.html",
+        course=course, tests=tests, passage_map_json=json.dumps(passage_map),
+    )
 
 
 def _parse_scope(
