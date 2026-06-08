@@ -87,6 +87,15 @@ SOLID_FILL = 0.40
 # fully erase the first attempt.
 MULTI_SECOND_FILL = 0.30
 
+# If top - second is at least this large, top is decisively the answer
+# regardless of how heavily filled the runner-up looks. Pranav had
+# legitimate single answers where top=0.65 and second=0.34 — the gap of
+# 0.31 says "one bubble was drawn much harder than the other" and
+# shouldn't be misread as a multi-mark. This rule fires before the
+# MULTI-second check so heavy-handed Os with light residue elsewhere
+# resolve cleanly.
+CLEAR_DOMINANCE_GAP = 0.15
+
 # In the moderate-fill band (MIN_FILL ≤ top < SOLID_FILL) we need the
 # runner-up to be much smaller than the top before committing. If
 # second/top exceeds this ratio it's ambiguous (BLANK if both are
@@ -166,34 +175,39 @@ def _sample_warped(
         second = ranked[1] if len(ranked) > 1 else {"fill": 0.0}
         t = top["fill"]
         s = second["fill"]
+        gap = t - s
 
         # 1. Below the noise floor → BLANK.
         if t < min_fill:
             answers[q] = "BLANK"
             continue
 
-        # 2. Two clearly-deliberate marks → MULTI even if there's a big gap.
-        #    Catches the "answer changed mid-test, didn't fully erase" case
-        #    where one mark is ~0.55 and the other is ~0.45.
+        # 2. Clear absolute dominance → top wins regardless of second's
+        #    level. If top is 0.15+ above the runner-up, the student
+        #    drew one bubble noticeably darker than the others — even
+        #    if the second is also dark from a partial erase, top is
+        #    the deliberate answer.
+        if gap >= CLEAR_DOMINANCE_GAP:
+            answers[q] = top["option"]
+            continue
+
+        # 3. Two heavily-marked bubbles with no clear dominance → MULTI.
+        #    This catches the actual "answer changed, didn't erase" cases
+        #    where both bubbles read 0.45+ and the gap is small.
         if s >= MULTI_SECOND_FILL:
             answers[q] = "MULTI"
             continue
 
-        # 3. Top is confidently filled on its own → commit to it.
+        # 4. Top is confidently filled on its own → commit to it.
         if t >= SOLID_FILL:
             answers[q] = top["option"]
             continue
 
-        # 4. Moderate-fill band: top is between min_fill and SOLID_FILL.
-        #    Require the runner-up to be much smaller before committing —
-        #    otherwise it's likely page noise / shadow rather than a real
-        #    deliberate mark. Split ambiguous cases by top's magnitude:
-        #    bottom of the band → BLANK; nearer the top → MULTI.
-        rel = s / t if t > 0 else 0.0
-        if rel <= MODERATE_MAX_REL:
-            answers[q] = top["option"]
-        else:
-            answers[q] = "MULTI" if t >= 0.30 else "BLANK"
+        # 5. Moderate-fill band (MIN_FILL ≤ top < SOLID_FILL) with no
+        #    clear dominance and no two-mark indication. Likely a
+        #    page-shadow / partial-erase artifact. Lean MULTI when top
+        #    is still above 0.30, BLANK when it's still in the noise.
+        answers[q] = "MULTI" if t >= 0.30 else "BLANK"
 
     return answers, fills_per_q, binary
 
