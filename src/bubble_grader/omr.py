@@ -66,19 +66,39 @@ def _load_grayscale(path: Path | str, pdf_dpi: int = 300) -> np.ndarray:
 
 # Tuneables — the bubble-recognition thresholds.
 # Fills are AFTER per-bubble baseline subtraction (the baseline removes the
-# pre-printed letter ink), so a blank bubble reads ≈ 0 and even a light pencil
-# mark cleanly clears MIN_FILL. AMBIGUOUS_REL rescues high-baseline scans where
-# every bubble reads a touch dark but one bubble still stands out proportionally.
-MIN_FILL = 0.10           # below this adjusted ratio → BLANK
-                          # was 0.04; raised after the OMR was reporting
-                          # false-positive fills on visibly empty bubbles
-                          # (scan noise + light printed-letter density
-                          # could nudge an unmarked bubble past 0.04).
-AMBIGUOUS_DELTA = 0.05    # absolute gap between top and runner-up
-                          # was 0.03; raised in tandem with MIN_FILL so a
-                          # narrowly-edging top option can't commit when
-                          # both top and runner-up are weakly marked.
-AMBIGUOUS_REL = 0.25      # OR relative gap (top - second)/top
+# pre-printed letter ink), so a blank bubble reads ≈ 0 and a confidently
+# marked one reads in the 0.40–0.70 range.
+
+# Below this floor, treat the question as BLANK regardless of which option
+# was the top. Was 0.10; bumped to 0.20 after we saw faintly-shadowed
+# Science bubbles (page-curl darkening) read in the 0.13–0.20 band on
+# Pranav's submission.
+MIN_FILL = 0.20
+
+# A bubble at or above this fill is "confidently marked" on its own —
+# good enough to commit to as the answer without needing strong dominance
+# over the runner-up.
+SOLID_FILL = 0.40
+
+# If the SECOND-place bubble for a question is itself filled at or above
+# this threshold, two clearly-deliberate marks exist on the row →
+# declare MULTI regardless of how dominant the top is. Catches the
+# common "answer changed mid-test" scenario where the student didn't
+# fully erase the first attempt.
+MULTI_SECOND_FILL = 0.30
+
+# In the moderate-fill band (MIN_FILL ≤ top < SOLID_FILL) we need the
+# runner-up to be much smaller than the top before committing. If
+# second/top exceeds this ratio it's ambiguous (BLANK if both are
+# faint, MULTI if both are moderate).
+MODERATE_MAX_REL = 0.30
+
+# Legacy thresholds kept around for the few callers that still pass
+# them explicitly (e.g. `read --min-fill`, `read --ambiguous-delta`).
+# The new decide() logic above takes precedence; these only matter
+# if you bypass it for debugging.
+AMBIGUOUS_DELTA = 0.05
+AMBIGUOUS_REL = 0.25
 SAMPLE_SHRINK = 0.70      # sample inside this fraction of the printed radius
 
 
@@ -144,17 +164,36 @@ def _sample_warped(
         ranked = sorted(fills_per_q[q], key=lambda b: -b["fill"])
         top = ranked[0]
         second = ranked[1] if len(ranked) > 1 else {"fill": 0.0}
-        abs_gap = top["fill"] - second["fill"]
-        rel_gap = abs_gap / top["fill"] if top["fill"] > 0 else 0.0
-        if top["fill"] < min_fill:
+        t = top["fill"]
+        s = second["fill"]
+
+        # 1. Below the noise floor → BLANK.
+        if t < min_fill:
             answers[q] = "BLANK"
-        elif abs_gap >= ambiguous_delta or rel_gap >= AMBIGUOUS_REL:
-            # Either a clear absolute gap OR a clear relative gap — accept top.
-            # The rel-gap branch rescues high-baseline scans where every bubble
-            # reads a bit dark, but one bubble still stands out proportionally.
+            continue
+
+        # 2. Two clearly-deliberate marks → MULTI even if there's a big gap.
+        #    Catches the "answer changed mid-test, didn't fully erase" case
+        #    where one mark is ~0.55 and the other is ~0.45.
+        if s >= MULTI_SECOND_FILL:
+            answers[q] = "MULTI"
+            continue
+
+        # 3. Top is confidently filled on its own → commit to it.
+        if t >= SOLID_FILL:
+            answers[q] = top["option"]
+            continue
+
+        # 4. Moderate-fill band: top is between min_fill and SOLID_FILL.
+        #    Require the runner-up to be much smaller before committing —
+        #    otherwise it's likely page noise / shadow rather than a real
+        #    deliberate mark. Split ambiguous cases by top's magnitude:
+        #    bottom of the band → BLANK; nearer the top → MULTI.
+        rel = s / t if t > 0 else 0.0
+        if rel <= MODERATE_MAX_REL:
             answers[q] = top["option"]
         else:
-            answers[q] = "MULTI"
+            answers[q] = "MULTI" if t >= 0.30 else "BLANK"
 
     return answers, fills_per_q, binary
 
