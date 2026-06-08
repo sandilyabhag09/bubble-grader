@@ -27,14 +27,31 @@ from .sheet import ARUCO_DICT_NAME, MARGIN, MARKER_SIZE, _aruco_image
 PAGE_W_MM = 215.9
 PAGE_H_MM = 279.4
 
-# ACT-format layout. rows_per_col describes how questions stack down each of
-# the 6 columns; the last column is typically shorter so the section fits.
+# ACT-format layout. rows_per_col describes how questions stack down each
+# column for that section; the last column is often shorter so the section fits.
+
+# Legacy 75/60/40/40 ACT — used 2016 through mid-2025.
 ACT_SECTIONS = [
     {"name": "Test 1", "n_questions": 75, "n_options": 4, "rows_per_col": [13, 13, 13, 13, 13, 10]},
     {"name": "Test 2", "n_questions": 60, "n_options": 5, "rows_per_col": [10, 10, 10, 10, 10, 10]},
     {"name": "Test 3", "n_questions": 40, "n_options": 4, "rows_per_col": [7, 7, 7, 7, 7, 5]},
     {"name": "Test 4", "n_questions": 40, "n_options": 4, "rows_per_col": [7, 7, 7, 7, 7, 5]},
 ]
+
+# Shortened ACT (50/45/36/40) introduced 2025. Same bubble convention
+# (odd → A-D[E], even → F-J[K]), different column counts per section.
+NEW_FORMAT_SECTIONS = [
+    {"name": "Test 1", "n_questions": 50, "n_options": 4, "rows_per_col": [13, 13, 13, 11]},
+    {"name": "Test 2", "n_questions": 45, "n_options": 5, "rows_per_col": [10, 10, 10, 10, 5]},
+    {"name": "Test 3", "n_questions": 36, "n_options": 4, "rows_per_col": [7, 7, 7, 7, 7, 1]},
+    {"name": "Test 4", "n_questions": 40, "n_options": 4, "rows_per_col": [7, 7, 7, 7, 7, 5]},
+]
+
+# Named registry so callers can ask for a layout by string.
+LAYOUTS = {
+    "legacy": ACT_SECTIONS,
+    "new":    NEW_FORMAT_SECTIONS,
+}
 
 
 def _options_for(question_num: int, n_options: int) -> str:
@@ -63,34 +80,93 @@ def _cluster_by_y(bubbles: list[dict], tol_px: float) -> list[list[dict]]:
 
 
 def _split_into_sections(
-    bubbles: list[dict], dpi: int, n_sections: int = 4
+    bubbles: list[dict],
+    dpi: int,
+    n_sections: int = 4,
+    *,
+    row_tol_mm: float = 2.0,
+    section_gap_mm: float = 10.0,
+    min_row_width: int = 18,
 ) -> list[list[list[dict]]]:
     """Drop header bubbles, group test bubbles into N section row-groups.
 
-    Heuristic: bubbles cluster into rows. Test-section rows are wide (≥18
-    bubbles across 6 columns × 4-5 options). Header rows (BOOKLET NUMBER grid,
-    examples) have far fewer per row, so we drop rows below a count threshold.
-    Then a Y-gap >10mm marks a section boundary.
+    Heuristic: bubbles cluster into rows. Test rows are wide (≥``min_row_width``
+    bubbles); header rows (booklet number grid, examples) have far fewer so we
+    drop rows below the threshold. A vertical gap >``section_gap_mm`` between
+    consecutive test rows marks a section boundary.
+
+    The new-format sheet has tighter row spacing and a narrower English test
+    section (16 bubbles per row instead of 24+), so callers running the new
+    layout pass smaller ``row_tol_mm`` and ``min_row_width`` than the legacy
+    defaults.
     """
     px_per_mm = dpi / 25.4
-    row_tol_px = 2.0 * px_per_mm
-    section_gap_px = 10.0 * px_per_mm
+    row_tol_px = row_tol_mm * px_per_mm
+    section_gap_px = section_gap_mm * px_per_mm
 
     rows = _cluster_by_y(bubbles, tol_px=row_tol_px)
-    test_rows = [r for r in rows if len(r) >= 18]
+    # Track each row's mean Y so we can group rows into "section bands".
+    rows_with_cy: list[tuple[float, list[dict]]] = [
+        (sum(b["cy"] for b in r) / len(r), r) for r in rows
+    ]
 
-    sections: list[list[list[dict]]] = []
-    cur: list[list[dict]] = []
+    # Stage 1 — pick out the wide rows. These reliably ARE test-question rows
+    # (header bubbles like booklet number / form columns are narrower). The
+    # Y-gap between them tells us where one section ends and the next begins.
+    wide = [(cy, r) for (cy, r) in rows_with_cy if len(r) >= min_row_width]
+
+    # Stage 2 — collapse the wide rows into N sections by Y-gap.
+    wide_bands: list[list[tuple[float, list[dict]]]] = []
+    band: list[tuple[float, list[dict]]] = []
     last_cy: float | None = None
-    for r in test_rows:
-        cy = sum(b["cy"] for b in r) / len(r)
+    for cy, r in wide:
         if last_cy is not None and (cy - last_cy) > section_gap_px:
-            sections.append(cur)
-            cur = []
-        cur.append(r)
+            wide_bands.append(band)
+            band = []
+        band.append((cy, r))
         last_cy = cy
-    if cur:
-        sections.append(cur)
+    if band:
+        wide_bands.append(band)
+
+    # Stage 3 — extend each band's Y range to absorb adjacent narrow rows
+    # (e.g. the new-format Test 1 has 12-bubble trailing rows where only
+    # 3 of 4 columns reach the bottom of the section). We grow the band
+    # downwards until either the Y-gap to the next row exceeds
+    # section_gap_px or we land on a wide row that belongs to the next
+    # band. Going upwards is symmetric.
+    sections: list[list[list[dict]]] = []
+    consumed: set[int] = set()  # row indices we've already assigned to a band
+    rows_indexed = list(enumerate(rows_with_cy))
+    rows_indexed.sort(key=lambda x: x[1][0])
+
+    for wb in wide_bands:
+        wb_top = min(cy for cy, _ in wb)
+        wb_bot = max(cy for cy, _ in wb)
+        in_band: list[tuple[float, list[dict]]] = list(wb)
+        # Try to absorb rows above and below the band.
+        for idx, (cy, r) in rows_indexed:
+            if idx in consumed:
+                continue
+            if (cy, r) in wb:
+                continue
+            # Skip clearly-header rows (very narrow) by a softer floor —
+            # bubble-grid rows for any plausible ACT section have at least
+            # 4 bubbles per visible column × 1 column = 4. Below 4 is noise.
+            if len(r) < 4:
+                continue
+            # Allow the band to swallow rows whose Y is within section_gap_px
+            # of the band's current extent.
+            if wb_top - section_gap_px <= cy <= wb_bot + section_gap_px:
+                in_band.append((cy, r))
+                wb_top = min(wb_top, cy)
+                wb_bot = max(wb_bot, cy)
+        # Sort the band's rows top-down for downstream labeling.
+        in_band.sort(key=lambda x: x[0])
+        for idx, (cy, r) in enumerate(rows_with_cy):
+            for (bcy, br) in in_band:
+                if br is r:
+                    consumed.add(idx)
+        sections.append([r for _, r in in_band])
 
     if len(sections) != n_sections:
         # Fall back: pick the n_sections largest groups by total bubble count.
@@ -225,18 +301,42 @@ def _label_section(
     return labeled, warnings
 
 
-def label_bubbles(detected: list[dict], dpi: int) -> tuple[list[dict], list[str]]:
+def label_bubbles(
+    detected: list[dict],
+    dpi: int,
+    sections_config: list[dict] | None = None,
+) -> tuple[list[dict], list[str]]:
     """Top-level labeler: split into ACT sections and assign q/option to each bubble.
 
-    Question numbering is global (1..215) across the four tests so the existing
-    reader, which keys by a single `q`, works without modification. The
-    per-test number is preserved in `q_in_test` for answer-key mapping.
+    Question numbering is global across all four tests so the existing reader
+    (which keys by a single ``q``) works without modification. The per-test
+    number is preserved in ``q_in_test`` for answer-key mapping.
+
+    ``sections_config`` selects which layout to apply. Defaults to the
+    legacy 75/60/40/40 ``ACT_SECTIONS``; pass ``NEW_FORMAT_SECTIONS`` for
+    the shortened 50/45/36/40 format.
     """
-    sections = _split_into_sections(detected, dpi=dpi, n_sections=len(ACT_SECTIONS))
+    cfg_list = sections_config if sections_config is not None else ACT_SECTIONS
+    # Pick the row-width floor from the SMALLEST section width — anything
+    # narrower must be header noise. For the legacy layout the smallest
+    # section is 24 bubbles wide (6×4); the new layout's English section
+    # is just 16 (4×4), so we'd reject real rows with the legacy default.
+    min_row_width = min(s["n_options"] * len(s["rows_per_col"]) for s in cfg_list)
+    # New-format rows are also packed tighter vertically — about 4-5mm
+    # apart vs ~6mm on the legacy sheet. Halve the Y-tolerance for "new"
+    # so two adjacent rows don't merge into one.
+    row_tol_mm = 1.0 if cfg_list is NEW_FORMAT_SECTIONS else 2.0
+    sections = _split_into_sections(
+        detected,
+        dpi=dpi,
+        n_sections=len(cfg_list),
+        row_tol_mm=row_tol_mm,
+        min_row_width=min_row_width,
+    )
     all_warnings: list[str] = []
     labeled: list[dict] = []
     q_offset = 0
-    for cfg, section_rows in zip(ACT_SECTIONS, sections):
+    for cfg, section_rows in zip(cfg_list, sections):
         section_labeled, warnings = _label_section(section_rows, cfg, q_offset=q_offset)
         labeled.extend(section_labeled)
         all_warnings.extend(warnings)
@@ -381,27 +481,34 @@ def prepare_act_sheet(
     out_dir: Path | str,
     name: str = "act_sheet",
     dpi: int = 300,
+    layout: str = "legacy",
 ) -> dict:
     """Full pipeline: rasterize → detect → filter+label → overlay markers → save.
+
+    ``layout`` selects the section config: ``"legacy"`` for the 75/60/40/40
+    sheet (default), ``"new"`` for the 50/45/36/40 short-format sheet.
 
     Outputs under out_dir/:
       <name>.pdf            — printable, with ArUco corner markers
       <name>.png            — same as PDF, raster
       <name>.detected.png   — debug overlay: red circles around every detection
-      <name>.labeled.png    — debug overlay: only the 920 kept bubbles, green
+      <name>.labeled.png    — debug overlay: kept bubbles, green
       <name>.template.json  — compatible with omr.read_sheet
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     px_per_mm = dpi / 25.4
-    expected_total = sum(s["n_questions"] * s["n_options"] for s in ACT_SECTIONS)
+    sections_config = LAYOUTS.get(layout)
+    if sections_config is None:
+        raise ValueError(f"Unknown layout {layout!r}; choose from {list(LAYOUTS)}.")
+    expected_total = sum(s["n_questions"] * s["n_options"] for s in sections_config)
 
     gray = rasterize_pdf(src_pdf, dpi=dpi)
     # Save the unmodified rasterization — used as the reference image for the
     # feature-matching reader (`read-fm`) which doesn't rely on ArUco markers.
     cv2.imwrite(str(out_dir / f"{name}.reference.png"), gray)
     detected = detect_bubbles(gray, px_per_mm=px_per_mm)
-    labeled, warnings = label_bubbles(detected, dpi=dpi)
+    labeled, warnings = label_bubbles(detected, dpi=dpi, sections_config=sections_config)
 
     # Diagnostic overlays
     cv2.imwrite(str(out_dir / f"{name}.detected.png"), annotate_detections(gray, detected))
@@ -470,9 +577,10 @@ def prepare_act_sheet(
     template = {
         "version": 1,
         "kind": "act",
+        "layout": layout,
         "page_size_mm": [PAGE_W_MM, PAGE_H_MM],
-        "sections": ACT_SECTIONS,
-        "n_questions": sum(s["n_questions"] for s in ACT_SECTIONS),
+        "sections": sections_config,
+        "n_questions": sum(s["n_questions"] for s in sections_config),
         "source_dpi": dpi,                          # DPI of <name>.reference.png
         "reference_image": f"{name}.reference.png",
         "fiducials": {

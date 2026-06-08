@@ -519,10 +519,12 @@ def cmd_generate_sheet(n_questions: int, n_options: int, name: str, out_dir: str
               help="Output directory (default: data/sheets/).")
 @click.option("--dpi", default=300, show_default=True,
               help="Rasterization DPI.")
-def cmd_prepare_act(src_pdf: str, name: str, out_dir: str | None, dpi: int) -> None:
+@click.option("--layout", type=click.Choice(["legacy", "new"]), default="legacy",
+              show_default=True, help="Sheet layout: legacy 75/60/40/40 or new 50/45/36/40.")
+def cmd_prepare_act(src_pdf: str, name: str, out_dir: str | None, dpi: int, layout: str) -> None:
     """Detect bubbles in an existing ACT-format PDF and overlay ArUco markers."""
     target = Path(out_dir) if out_dir else DATA_DIR / "sheets"
-    result = prepare_act_sheet(src_pdf, target, name=name, dpi=dpi)
+    result = prepare_act_sheet(src_pdf, target, name=name, dpi=dpi, layout=layout)
     click.echo(f"Detected:  {result['detected']} bubbles total")
     click.echo(f"Labeled:   {result['labeled']} (kept after section filter)")
     click.echo(f"Expected:  {result['expected']} (4 ACT sections)")

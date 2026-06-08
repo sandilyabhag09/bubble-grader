@@ -215,17 +215,26 @@ def send_feedback_for_assignment(
     teacher_name: str | None = None,
     include_overlay: bool = True,
     dry_run: bool = False,
-    template_path: Path | str = DEFAULT_TEMPLATE,
-    reference_path: Path | str = DEFAULT_REFERENCE,
+    template_path: Path | str | None = None,
+    reference_path: Path | str | None = None,
 ) -> dict:
     """For each graded submission, compose + send (or preview) the student's email."""
-    template_path = Path(template_path)
-    reference_path = Path(reference_path)
-
     # Look up the assignment's scope (partial vs full) so build_report can
     # tailor the email body. Missing app_assignments row = treat as full.
     app_asg = dbmod.get_app_assignment(course_id, coursework_id)
     scope = (app_asg or {}).get("scope")
+
+    # Pick the OMR template that matches the test's format. Callers can
+    # still override via the template_path / reference_path kwargs.
+    if template_path is None or reference_path is None:
+        from .submissions import template_for_test
+        test_id = (app_asg or {}).get("test_id")
+        if test_id:
+            auto_tpl, auto_ref = template_for_test(test_id)
+            template_path = template_path or auto_tpl
+            reference_path = reference_path or auto_ref
+    template_path = Path(template_path or DEFAULT_TEMPLATE)
+    reference_path = Path(reference_path or DEFAULT_REFERENCE)
 
     # Latest submission per student, optionally filtered by `only_students`.
     rows = dbmod.list_submissions(course_id=course_id, coursework_id=coursework_id)

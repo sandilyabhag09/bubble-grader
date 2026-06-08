@@ -101,6 +101,27 @@ def fetch_assignment(
     return manifest
 
 
+DEFAULT_SHEETS_DIR = Path("data/sheets")
+
+
+def template_for_test(test_id: str) -> tuple[Path, Path]:
+    """Pick the right OMR template + reference image for a test.
+
+    Inspects the test's English answer-key length to detect new-format
+    (50/45/36/40) vs legacy (75/60/40/40). New-format tests use
+    ``act_sheet_new.*``; everything else uses the original ``act_sheet.*``.
+    Returns (template_path, reference_path) ready to hand to read_sheet_fm.
+    """
+    t = dbmod.get_test(test_id)
+    is_new = False
+    if t and t.get("answer_key"):
+        eng = (t["answer_key"] or {}).get("Test 1") or {}
+        is_new = len(eng) <= 50
+    stem = "act_sheet_new" if is_new else "act_sheet"
+    base = DEFAULT_SHEETS_DIR
+    return (base / f"{stem}.template.json", base / f"{stem}.reference.png")
+
+
 def _resolve_reference(template_path: Path) -> Path:
     """Find the reference image associated with a template (for feature matching)."""
     tpl = json.loads(template_path.read_text())

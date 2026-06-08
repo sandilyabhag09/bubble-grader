@@ -25,7 +25,16 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 
 
 def _load_grayscale(path: Path | str, pdf_dpi: int = 300) -> np.ndarray:
-    """Load an image, or rasterize page 1 of a PDF, into a grayscale numpy array."""
+    """Load an image, or rasterize page 1 of a PDF, into a grayscale numpy array.
+
+    PDFs declared at a normal letter-size page get rendered at the requested
+    DPI directly. Some scans (especially phone-photo PDFs from Drive) report
+    page dimensions that match the photo's pixel count rather than the
+    physical sheet, so rendering at "300 DPI" would produce a 7000+ px image
+    that pushes ORB out of its scale-pyramid range. When that happens we
+    fall back to rendering at a fixed pixel HEIGHT (~3300 px) so the result
+    has roughly the same dimensions as the 300-DPI reference rasterization.
+    """
     p = Path(path)
     suffix = p.suffix.lower()
     if suffix == ".pdf":
@@ -34,7 +43,15 @@ def _load_grayscale(path: Path | str, pdf_dpi: int = 300) -> np.ndarray:
         if len(pdf) == 0:
             raise ValueError(f"PDF has no pages: {p}")
         page = pdf[0]
-        scale = pdf_dpi / 72.0  # PDF user-space units are 1/72 inch
+        # PDF user-space units are 1/72 inch. For a normal 8.5×11 page that
+        # gives a page height of 11 inches → 792 pt. Anything much taller
+        # than that means the embedded source already has its own resolution
+        # baked in, and we should target a pixel-height instead of DPI.
+        w_pt, h_pt = page.get_size()
+        scale = pdf_dpi / 72.0
+        target_h_px = int(11.0 * pdf_dpi)  # ≈ 3300 at 300 DPI
+        if h_pt * scale > target_h_px * 2:
+            scale = target_h_px / h_pt
         bitmap = page.render(scale=scale, grayscale=True)
         return np.array(bitmap.to_pil())
     if suffix in _IMAGE_SUFFIXES:

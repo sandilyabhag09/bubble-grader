@@ -502,11 +502,15 @@ def assignment_grade(
             title=owned.get("title"),
         )
 
+    # Pick the OMR template matching the test's format. Legacy 75/60/40/40
+    # tests use act_sheet.*; new-format 50/45/36/40 tests use act_sheet_new.*.
+    from .submissions import template_for_test
+    tpl_path, _ref_path = template_for_test(test_id)
     try:
         result = grade_classroom_assignment(
             email, course_id, cw_id,
             test_id=test_id,
-            template_path="data/sheets/act_sheet.template.json",
+            template_path=str(tpl_path),
         )
     except Exception as e:  # noqa: BLE001
         _flash(request, "bad", f"Grading failed: {type(e).__name__}: {e}")
