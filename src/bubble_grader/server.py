@@ -436,10 +436,18 @@ def assignment_view(request: Request, course_id: str, cw_id: str, test: str | No
         pass
 
     # Roster + locally graded submissions.
+    # `list_submissions` returns rows ORDER BY created_at DESC, so the
+    # newest row for each student appears FIRST. We want to keep that
+    # first occurrence; a dict comprehension would silently overwrite
+    # with the oldest. `setdefault` is the right tool here.
     roster = list_roster(email, course_id)
-    graded = {r["student_id"]: r for r in dbmod.list_submissions(
+    graded: dict[str, dict] = {}
+    for r in dbmod.list_submissions(
         course_id=course_id, coursework_id=cw_id, include_score=True,
-    ) if r.get("student_id")}
+    ):
+        sid = r.get("student_id")
+        if sid:
+            graded.setdefault(sid, r)
 
     rows = []
     for student in roster:
@@ -758,11 +766,16 @@ async def student_apply_overrides(
         _flash(request, "bad", "Can't recompute — test or answer key missing.")
         return RedirectResponse(detail_url, status_code=303)
 
-    template_path = Path("data/sheets/act_sheet.template.json")
+    # Pick the OMR template matching the test's format. Without this the
+    # legacy 215-question template gets used for new-format submissions,
+    # which corrupts the (section, q_in_test) → global q mapping below
+    # and wipes Test 4 out of the regraded score entirely.
+    from .submissions import template_for_test
+    template_path, _ = template_for_test(sub["test_id"])
     template = json.loads(template_path.read_text())
 
-    # (section, q_in_test) → global q (1..215). Derived from the template bubbles
-    # so we don't have to hard-code section offsets here.
+    # (section, q_in_test) → global q. Derived from the chosen template's
+    # bubble list so we don't have to hard-code section offsets here.
     sq_to_q: dict[tuple[str, int], int] = {}
     for b in template.get("bubbles", []):
         key = (b.get("section"), b.get("q_in_test"))
