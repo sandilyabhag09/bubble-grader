@@ -63,7 +63,7 @@
         {% for r in rows %}
         <tr>
           <td class="muted">{{ r.created_at }}</td>
-          <td><code>{{ r.test_id }}</code></td>
+          <td>{{ r.test_name }}</td>
           {% for sec in section_names %}
             <td>
               {% if r.sections[sec].raw is not none or r.sections[sec].scaled is not none %}

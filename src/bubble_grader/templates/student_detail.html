@@ -30,8 +30,8 @@
           <td>{{ sec.display }}</td>
           <td>{{ sec.info.raw_score }}/{{ sec.info.n_questions }}</td>
           <td><strong>{{ sec.info.scaled_score if sec.info.scaled_score is not none else "—" }}</strong></td>
-          <td>{{ sec.info.n_correct }}</td>
-          <td>{{ sec.info.n_incorrect }}</td>
+          <td>{{ sec.info.n_correct }}{% if sec.skipped %} <span class="muted">({{ sec.skipped_correct }} skipped)</span>{% endif %}</td>
+          <td>{{ sec.info.n_incorrect }}{% if sec.skipped %} <span class="muted">({{ sec.skipped_wrong }} skipped)</span>{% endif %}</td>
           <td>{{ sec.info.n_blank }}</td>
           <td>{{ sec.info.n_multi }}</td>
         </tr>

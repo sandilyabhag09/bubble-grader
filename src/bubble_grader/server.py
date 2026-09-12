@@ -3,6 +3,7 @@
 import base64
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from .classroom import (
     list_roster,
     list_submissions,
 )
-from .config import FERNET_KEY, SERVER_PORT
+from .config import AUTO_GRADE_ON_TURNIN, FERNET_KEY, SERVER_PORT
 from .google_auth import (
     authorization_url,
     credentials_to_dict,
@@ -42,6 +43,9 @@ from .version_check import snapshot as update_snapshot, start_background_poller
 async def lifespan(_app: FastAPI):
     dbmod.init_db()
     start_background_poller()
+    if AUTO_GRADE_ON_TURNIN:
+        from .auto_grade import start_auto_grade_poller
+        start_auto_grade_poller()
     yield
 
 
@@ -225,12 +229,128 @@ def course_roster(request: Request, course_id: str):
         sid = s.get("student_id")
         if sid and sid not in latest_by_student:
             latest_by_student[sid] = s
+    # Map test_id → familiar test name so the roster shows "Alex Atala
+    # (New Format)" rather than the raw id/slug.
+    test_names = {t["id"]: t.get("name") for t in dbmod.list_tests()}
     for student in roster:
-        student["latest"] = latest_by_student.get(student["id"])
+        latest = latest_by_student.get(student["id"])
+        if latest is not None:
+            latest = {
+                **latest,
+                "test_name": test_names.get(latest.get("test_id")) or latest.get("test_id"),
+            }
+        student["latest"] = latest
     return _render(
         request, "roster.html",
         course=course, roster=roster,
     )
+
+
+def _as_dt(ts: Any) -> datetime | None:
+    """Coerce a submission timestamp (datetime or ISO string) to a datetime."""
+    if isinstance(ts, datetime):
+        return ts
+    try:
+        return datetime.fromisoformat(str(ts))
+    except (TypeError, ValueError):
+        return None
+
+
+def _due_datetime(due_date: dict | None, due_time: dict | None) -> datetime | None:
+    """Build a UTC datetime from Classroom's split dueDate/dueTime fields.
+
+    ``dueDate`` is ``{year, month, day}``; ``dueTime`` is ``{hours, minutes,...}``
+    in UTC and may be absent (then we anchor to the start of that day).
+    """
+    if not due_date:
+        return None
+    try:
+        t = due_time or {}
+        return datetime(
+            int(due_date["year"]), int(due_date["month"]), int(due_date["day"]),
+            int(t.get("hours", 0)), int(t.get("minutes", 0)),
+            tzinfo=timezone.utc,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _coursework_due_map(email: str, course_id: str) -> dict[str, datetime]:
+    """coursework_id → due datetime (UTC), best-effort. Empty on any API error."""
+    try:
+        cws = list_coursework(email, course_id)
+    except Exception:  # noqa: BLE001 — degrade gracefully to "no due dates"
+        return {}
+    out: dict[str, datetime] = {}
+    for cw in cws:
+        due = _due_datetime(cw.get("dueDate"), cw.get("dueTime"))
+        if due is not None:
+            out[cw["id"]] = due
+    return out
+
+
+def _pick_cluster_winner(cluster: list[dict], due_by_cw: dict[str, datetime]) -> dict:
+    """Choose which submission represents a cluster of re-grades.
+
+    ``cluster`` is newest-first. Selection rules:
+
+    1. A submission carrying **manual overrides** is sticky — keep the newest
+       such one, so a later automatic re-grade can't silently wipe a teacher's
+       correction. (Overrides patch a row in place, so they live on whichever
+       submission has a non-empty ``score['overrides']``.)
+    2. Otherwise keep the grade whose timestamp is **closest to the due date**.
+    3. If no due date is known, fall back to the newest grade.
+    """
+    overrides = [s for s in cluster if (s.get("score") or {}).get("overrides")]
+    if overrides:
+        return overrides[0]  # newest-first → newest override
+
+    best, best_dist = None, None
+    for s in cluster:
+        due = due_by_cw.get(s.get("coursework_id"))
+        when = _as_dt(s.get("created_at"))
+        if due is None or when is None:
+            continue
+        dist = abs((when - due).total_seconds())
+        if best_dist is None or dist < best_dist:
+            best, best_dist = s, dist
+    return best if best is not None else cluster[0]
+
+
+def _dedupe_regrades(
+    subs: list[dict], due_by_cw: dict[str, datetime], window_days: int = 7
+) -> list[dict]:
+    """Collapse re-grades of the same assignment that happen close together.
+
+    Submissions for the same (coursework, test) within ``window_days`` of each
+    other are one cluster, represented by a single row chosen via
+    :func:`_pick_cluster_winner`. Re-grades more than a week apart are treated
+    as separate attempts and each is kept. Filtering is display-only — no rows
+    are deleted from the database.
+
+    ``subs`` must be newest-first (as ``list_submissions`` returns).
+    """
+    window = timedelta(days=window_days)
+    groups: dict[tuple, list[dict]] = {}
+    for s in subs:  # newest-first
+        key = (s.get("coursework_id"), s.get("test_id"))
+        groups.setdefault(key, []).append(s)
+
+    keep_ids: set = set()
+    for group in groups.values():
+        cluster: list[dict] = []
+        anchor: datetime | None = None
+        for s in group:  # newest-first within the group
+            when = _as_dt(s.get("created_at"))
+            if anchor is not None and when is not None and (anchor - when) <= window:
+                cluster.append(s)
+            else:
+                if cluster:
+                    keep_ids.add(_pick_cluster_winner(cluster, due_by_cw)["id"])
+                cluster, anchor = [s], when
+        if cluster:
+            keep_ids.add(_pick_cluster_winner(cluster, due_by_cw)["id"])
+    return [s for s in subs if s["id"] in keep_ids]
 
 
 @app.get(
@@ -251,11 +371,17 @@ def course_student_detail(request: Request, course_id: str, student_id: str):
     subs = dbmod.list_submissions(
         course_id=course_id, student_id=student_id, include_score=True,
     )
+    # A test re-graded several times in the same week shows once — the grade
+    # closest to the due date, unless a re-grade carries a manual override
+    # (which stays sticky). Keeps the table and averages from being skewed.
+    due_by_cw = _coursework_due_map(email, course_id)
+    subs = _dedupe_regrades(subs, due_by_cw)
 
     # For each submission: pull per-section raw + scaled out of `score`.
     # The full_grade output is { "sections": {"Test 1": {raw_score, scaled, ...}, ...},
     #                            "composite": int }.
     section_names = ["Test 1", "Test 2", "Test 3", "Test 4"]
+    test_names = {t["id"]: t.get("name") for t in dbmod.list_tests()}
     rows = []
     for s in subs:
         sc = s.get("score") or {}
@@ -270,6 +396,7 @@ def course_student_detail(request: Request, course_id: str, student_id: str):
         rows.append({
             "id": s["id"],
             "test_id": s["test_id"],
+            "test_name": test_names.get(s["test_id"]) or s["test_id"],
             "created_at": s["created_at"],
             "composite": s.get("composite"),
             "coursework_id": s.get("coursework_id"),
@@ -701,11 +828,40 @@ def student_detail_view(request: Request, course_id: str, cw_id: str, student_id
 
     score = sub.get("score") or {}
     sections_info: dict = score.get("sections") or {}
-    sections = [
-        {"display": _SECTION_LABELS.get(k, k), "info": sections_info[k]}
-        for k in ["Test 1", "Test 2", "Test 3", "Test 4"]
-        if k in sections_info
-    ]
+
+    # Field-test ("skipped") questions are kept out of the answer key, so the
+    # stored score never sees them. Re-grade them here (scored key + field-test
+    # answers) just to show how the student did on the not-scored questions:
+    # how many they got right (next to Correct) vs wrong (next to Wrong).
+    from .scoring import grade_answers as _grade, merge_field_test as _merge
+    from .submissions import template_for_test
+    ft_by_section: dict[str, list] = {}
+    try:
+        _t = dbmod.get_test(sub.get("test_id")) or {}
+        _fta = _t.get("field_test_answers")
+        if _fta:
+            _tp, _ = template_for_test(sub.get("test_id"))
+            _tpl = json.loads(Path(_tp).read_text())
+            _ans = {int(k): v for k, v in (sub.get("answers") or {}).items()}
+            _re = _grade(_ans, _tpl, _merge(_t.get("answer_key"), _fta), not_scored=_fta)
+            ft_by_section = {sec: info.get("details", []) for sec, info in _re.items()}
+    except Exception:  # noqa: BLE001 — no field-test breakdown if anything fails
+        ft_by_section = {}
+
+    sections = []
+    for k in ["Test 1", "Test 2", "Test 3", "Test 4"]:
+        if k not in sections_info:
+            continue
+        info = sections_info[k]
+        ft = [d for d in ft_by_section.get(k, []) if not d.get("scored", True)]
+        skipped_correct = sum(1 for d in ft if d.get("status") == "correct")
+        skipped_wrong = sum(1 for d in ft if d.get("status") in ("incorrect", "blank", "multi"))
+        sections.append({
+            "display": _SECTION_LABELS.get(k, k), "info": info,
+            "skipped_correct": skipped_correct,
+            "skipped_wrong": skipped_wrong,
+            "skipped": skipped_correct + skipped_wrong,
+        })
 
     # Pre-fill: every BLANK/MULTI flagged question.
     flagged: list[dict] = []

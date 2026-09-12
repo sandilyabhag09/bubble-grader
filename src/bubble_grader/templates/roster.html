@@ -38,7 +38,7 @@
             <td class="muted">{{ s.email or "—" }}</td>
             <td>
               {% if s.latest %}
-                <code>{{ s.latest.test_id }}</code>
+                {{ s.latest.test_name }}
               {% else %}
                 <span class="muted">—</span>
               {% endif %}
