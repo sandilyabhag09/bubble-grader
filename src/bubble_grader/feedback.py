@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 from . import db as dbmod
+from .config import DATA_DIR
 from .gmail import send_email
 from .scoring import grade_answers, merge_field_test
 
@@ -38,8 +39,8 @@ SECTION_DISPLAY = {
 SECTION_ORDER = ["Test 1", "Test 2", "Test 3", "Test 4"]
 
 # Default OMR template + reference. Could be made configurable later.
-DEFAULT_TEMPLATE = Path("data/sheets/act_sheet.template.json")
-DEFAULT_REFERENCE = Path("data/sheets/act_sheet.reference.png")
+DEFAULT_TEMPLATE = DATA_DIR / "sheets" / "act_sheet.template.json"
+DEFAULT_REFERENCE = DATA_DIR / "sheets" / "act_sheet.reference.png"
 
 
 def _missed_clause(details: list[dict], q_start: int | None = None, q_end: int | None = None) -> str:

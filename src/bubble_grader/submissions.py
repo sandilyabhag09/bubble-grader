@@ -27,6 +27,7 @@ from .classroom import (
     patch_grade,
     return_submission,
 )
+from .config import DATA_DIR
 from .drive import EXT_BY_MIME, download_file_bytes
 from .scoring import full_grade, partial_summary
 
@@ -141,7 +142,9 @@ def scan_to_tempfile(scan: dict) -> str:
     return path
 
 
-DEFAULT_SHEETS_DIR = Path("data/sheets")
+# Absolute so it works regardless of the process working directory
+# (serverless functions don't run from the repo root).
+DEFAULT_SHEETS_DIR = DATA_DIR / "sheets"
 
 
 def template_for_test(test_id: str) -> tuple[Path, Path]:

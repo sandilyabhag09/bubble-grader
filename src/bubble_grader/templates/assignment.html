@@ -192,15 +192,22 @@
         setProgress("grade-progress", "No turned-in submissions to grade yet.");
         setBusy(false); return;
       }
-      let graded = 0, failed = 0;
+      let graded = 0, failed = 0, firstError = null;
       for (let i = 0; i < students.length; i++) {
         const s = students[i];
         setProgress("grade-progress",
           `Grading ${i + 1}/${students.length} — ${s.name}…` + (failed ? ` (${failed} failed so far)` : ""));
         try {
           const r = await postForm(`${BASE}/grade/student`, { student_id: s.student_id, test_id: testId });
-          if (r.status === "graded") graded++; else failed++;
-        } catch (e) { failed++; }
+          if (r.status === "graded") graded++;
+          else { failed++; if (!firstError) firstError = r.error || r.status || "unknown"; console.error("grade failed", s.name, r); }
+        } catch (e) { failed++; if (!firstError) firstError = String(e); console.error("grade failed", s.name, e); }
+      }
+      if (!graded && failed) {
+        // Nothing worked — keep the page (and the reason) instead of reloading.
+        setProgress("grade-progress", `All ${failed} failed — first error: ${firstError}`);
+        setBusy(false);
+        return;
       }
       window.location.href = window.location.pathname + `#graded=${graded}/${students.length},failed=${failed}`;
       window.location.reload();
@@ -222,8 +229,9 @@
       setProgress("feedback-progress", `Emailing ${i + 1}/${ids.length}…` + (failed ? ` (${failed} failed)` : ""));
       try {
         const r = await postForm(`${BASE}/feedback/student`, { student_id: ids[i], teacher_name: teacher });
-        if (r.status === "sent") { sent++; if (r.attached_overlay) overlays++; } else failed++;
-      } catch (e) { failed++; }
+        if (r.status === "sent") { sent++; if (r.attached_overlay) overlays++; }
+        else { failed++; if (!window.__fbErr) window.__fbErr = r.error || r.status; console.error("feedback failed", r); }
+      } catch (e) { failed++; if (!window.__fbErr) window.__fbErr = String(e); }
     }
     let cleanup = "";
     if (sent && !failed) {
@@ -234,7 +242,7 @@
     }
     setProgress("feedback-progress",
       `Sent ${sent}/${ids.length} email(s) — overlay PDF attached on ${overlays}.` +
-      (failed ? ` ${failed} failed.` : "") + cleanup);
+      (failed ? ` ${failed} failed — first error: ${window.__fbErr}.` : "") + cleanup);
     setBusy(false);
   }
 

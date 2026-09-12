@@ -744,8 +744,12 @@ def assignment_grade_student(
             only_students=[student_id],
         )
     except Exception as e:  # noqa: BLE001
+        import traceback; traceback.print_exc()
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
     r = next(iter(result["results"]), None) or {"status": "no_classroom_submission"}
+    if r.get("status") != "graded":
+        # Surfaces in the hosting platform's function logs.
+        print(f"[grade-failed] cw={cw_id} student={student_id}: {r.get('status')} — {r.get('error')}")
     return {
         "student_id": student_id,
         "status": r.get("status"),
