@@ -210,7 +210,7 @@ def _resolve_reference(template_path: Path) -> Path:
 
 
 # Review-queue tuning: which reader decisions deserve a human glance.
-REVIEW_MAX_ITEMS = 12
+REVIEW_MAX_ITEMS = 20
 REVIEW_BLANK_ATTENTION = 0.12   # a "blank" with this much fill might be a faint mark
 REVIEW_RUNNERUP_ATTENTION = 0.20  # a chosen answer with a runner-up this dark is worth a look
 
@@ -242,17 +242,20 @@ def _review_suspects(read_result: dict, template: dict, max_items: int = REVIEW_
         second = ranked[1]["fill"] if len(ranked) > 1 else 0.0
         given = answers.get(q)
 
-        if given == "BLANK" and top >= REVIEW_BLANK_ATTENTION:
-            reason = f"read as BLANK, but one bubble shows fill {top:.2f} — faint mark?"
-            severity = 0
-        elif given == "MULTI":
+        # Every BLANK and MULTI costs the student a point, so each one gets a
+        # picture — the teacher confirms "yes, really blank" at a glance.
+        if given == "MULTI":
             reason = f"read as MULTI (two marks at {top:.2f} / {second:.2f})"
             severity = 0
-        elif isinstance(given, str) and given not in ("BLANK", "MULTI") and (
-            top < SOLID_FILL or second >= REVIEW_RUNNERUP_ATTENTION
-        ):
-            reason = f"kept {given}, but it was close (top {top:.2f}, runner-up {second:.2f})"
+        elif given == "BLANK" and top >= REVIEW_BLANK_ATTENTION:
+            reason = f"read as BLANK, but one bubble shows fill {top:.2f} — faint mark?"
+            severity = 0
+        elif given == "BLANK":
+            reason = "left blank (no mark detected)"
             severity = 1
+        elif isinstance(given, str) and (top < SOLID_FILL or second >= REVIEW_RUNNERUP_ATTENTION):
+            reason = f"kept {given}, but it was close (top {top:.2f}, runner-up {second:.2f})"
+            severity = 2
         else:
             continue
 
@@ -264,7 +267,7 @@ def _review_suspects(read_result: dict, template: dict, max_items: int = REVIEW_
             "_severity": severity,
         })
 
-    # Blank/multi first (they cost points silently), then borderline keeps.
+    # Multis and faint blanks first, then true blanks, then borderline keeps.
     suspects.sort(key=lambda d: (d["_severity"], d["section"] or "", d["q_in_test"] or 0))
     suspects = suspects[:max_items]
 

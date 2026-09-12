@@ -1057,7 +1057,7 @@ def student_detail_view(request: Request, course_id: str, cw_id: str, student_id
 
     flagged: list[dict] = []
     review = score.get("review")
-    if review:
+    if review is not None:
         for r0 in review:
             d = detail_by_q.get(r0.get("q"), {})
             flagged.append({

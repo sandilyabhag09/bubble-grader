@@ -37,8 +37,16 @@ def _read_result(per_q: dict, warped=True):
 
 
 def test_clean_reads_produce_no_suspects():
-    rr = _read_result({1: ("A", 0.65, 0.02), 2: ("BLANK", 0.03, 0.01)})
+    rr = _read_result({1: ("A", 0.65, 0.02), 2: ("B", 0.71, 0.00)})
     assert _review_suspects(rr, _template()) == []
+
+
+def test_true_blanks_are_included_with_crops():
+    """A genuinely blank row costs a point, so it still gets a picture —
+    the teacher confirms it's really blank instead of trusting the reader."""
+    rr = _read_result({1: ("BLANK", 0.03, 0.01), 2: ("A", 0.7, 0.0)})
+    (sus,) = _review_suspects(rr, _template())
+    assert sus["q"] == 1 and "left blank" in sus["reason"] and sus["crop_b64"]
 
 
 def test_faint_blank_multi_and_borderline_are_flagged():
@@ -52,8 +60,8 @@ def test_faint_blank_multi_and_borderline_are_flagged():
     out = _review_suspects(rr, _template())
     flagged_qs = {s["q"] for s in out}
     assert flagged_qs == {1, 2, 3, 4}
-    # blank/multi outrank borderline singles
-    assert [s["q"] for s in out[:2]] == [1, 2]
+    # multi + faint blank outrank borderline singles
+    assert {s["q"] for s in out[:2]} == {1, 2}
     for s in out:
         assert s["reason"] and s["section"] == "Test 1"
 
