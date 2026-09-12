@@ -429,7 +429,9 @@ def list_submissions(
         args.append(coursework_id)
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY created_at DESC"
+    # id tie-break: SQLite timestamps are second-granular, so two grades in
+    # the same second would otherwise order arbitrarily.
+    sql += " ORDER BY created_at DESC, id DESC"
     with get_conn() as conn:
         rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
     if include_score:
