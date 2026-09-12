@@ -205,7 +205,12 @@ def _assignment_liveness(email: str, course_id: str, cw_id: str) -> str:
         return "deleted" if status == 404 else "unknown"
     except Exception:  # noqa: BLE001
         return "unknown"
-    return "unpublished" if cw.get("state") != "PUBLISHED" else "unknown"
+    state = cw.get("state")
+    if state == "DELETED":
+        # Classroom keeps returning deleted coursework (with this marker)
+        # rather than 404ing — treat it the same: gone for good.
+        return "deleted"
+    return "unpublished" if state != "PUBLISHED" else "unknown"
 
 
 def start_auto_grade_poller() -> threading.Thread:
