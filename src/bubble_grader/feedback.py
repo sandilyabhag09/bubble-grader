@@ -191,6 +191,58 @@ def _student_scan_tempfile(
     return scan_to_tempfile(scan)
 
 
+def build_overlay_for_student(
+    teacher_email: str, course_id: str, coursework_id: str, student_id: str
+) -> tuple[bytes | None, str | None]:
+    """(pdf_bytes, None) for the student's marked-up sheet, or (None, reason).
+
+    Mirrors exactly what the feedback email attaches: latest submission,
+    details refreshed against the current key (field-test included), scan
+    pulled from the store (refetched from Drive if the cycle deleted it).
+    """
+    rows = dbmod.list_submissions(
+        course_id=course_id, coursework_id=coursework_id, student_id=student_id
+    )
+    if not rows:
+        return None, "No graded submission for this student yet."
+    full = dbmod.get_submission(rows[0]["id"])
+    if not full:
+        return None, "Submission record could not be loaded."
+
+    app_asg = dbmod.get_app_assignment(course_id, coursework_id)
+    test_id = (app_asg or {}).get("test_id") or full.get("test_id")
+    from .submissions import template_for_test
+    if test_id:
+        template_path, reference_path = template_for_test(test_id)
+    else:
+        template_path, reference_path = DEFAULT_TEMPLATE, DEFAULT_REFERENCE
+    _test = dbmod.get_test(test_id) if test_id else None
+
+    template_dict = json.loads(Path(template_path).read_text())
+    email_score = _refresh_missed_details(
+        full, template_dict, (_test or {}).get("answer_key"),
+        field_test_answers=(_test or {}).get("field_test_answers"),
+    )
+    details = [
+        d
+        for sec in (email_score.get("sections") or {}).values()
+        for d in (sec.get("details") or [])
+    ]
+
+    scan_path = _student_scan_tempfile(teacher_email, course_id, coursework_id, student_id)
+    if scan_path is None:
+        return None, "No scan on file for this student (and none fetchable from Drive)."
+    try:
+        return build_overlay_pdf(
+            scan_path, template_path, reference_path, details=details
+        ), None
+    finally:
+        try:
+            os.unlink(scan_path)
+        except OSError:
+            pass
+
+
 def build_overlay_pdf(
     scan_path: Path,
     template_path: Path = DEFAULT_TEMPLATE,

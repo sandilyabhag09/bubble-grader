@@ -91,7 +91,15 @@
                   <a href="/courses/{{ course.id }}/coursework/{{ cw.id }}/students/{{ r.student_id }}" title="Open detail / overrides">{{ r.name or r.student_id }}</a>
                   <div class="muted">{{ r.email or "" }}</div>
                 </td>
-                <td>{{ r.classroom_state or "—" }}</td>
+                <td>
+                  {{ r.classroom_state or "—" }}
+                  {% if r.grade_error %}
+                    <div class="muted" style="color: var(--color-destructive); font-size: 12px; max-width: 260px;"
+                         title="{{ r.grade_error.error or r.grade_error.status }}">
+                      ⚠ last grade attempt: {{ r.grade_error.status }}{% if r.grade_error.error %} — {{ r.grade_error.error|truncate(70) }}{% endif %}
+                    </div>
+                  {% endif %}
+                </td>
                 {% if is_partial %}
                   <td><strong>{% if r.partial %}{{ r.partial.raw }} / {{ r.partial.total }}{% else %}—{% endif %}</strong></td>
                   <td class="muted">{% if r.partial %}{{ r.partial.percent }}%{% else %}—{% endif %}</td>

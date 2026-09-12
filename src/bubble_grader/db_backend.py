@@ -245,6 +245,17 @@ DDL_SQLITE = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS grade_errors (
+        course_id TEXT NOT NULL,
+        coursework_id TEXT NOT NULL,
+        student_id TEXT NOT NULL,
+        status TEXT,
+        error TEXT,
+        updated_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (course_id, coursework_id, student_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS scan_files (
         course_id TEXT NOT NULL,
         coursework_id TEXT NOT NULL,
@@ -323,6 +334,17 @@ DDL_POSTGRES = [
         scope_json TEXT,
         created_at TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (course_id, coursework_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS grade_errors (
+        course_id TEXT NOT NULL,
+        coursework_id TEXT NOT NULL,
+        student_id TEXT NOT NULL,
+        status TEXT,
+        error TEXT,
+        updated_at TIMESTAMPTZ DEFAULT now(),
+        PRIMARY KEY (course_id, coursework_id, student_id)
     )
     """,
     """

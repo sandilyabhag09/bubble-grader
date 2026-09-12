@@ -301,6 +301,45 @@ def delete_app_assignment(
         return n
 
 
+def record_grade_error(
+    course_id: str, coursework_id: str, student_id: str,
+    status: str, error: str | None = None,
+) -> None:
+    """Remember why a student's last grade attempt failed (shown in the UI).
+    Overwritten on each attempt; cleared by clear_grade_error on success."""
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO grade_errors (course_id, coursework_id, student_id, status, error)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(course_id, coursework_id, student_id) DO UPDATE SET
+                status = excluded.status,
+                error = excluded.error,
+                updated_at = datetime('now')
+            """,
+            (course_id, coursework_id, student_id, status, error),
+        )
+
+
+def clear_grade_error(course_id: str, coursework_id: str, student_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM grade_errors WHERE course_id=? AND coursework_id=? AND student_id=?",
+            (course_id, coursework_id, student_id),
+        )
+
+
+def list_grade_errors(course_id: str, coursework_id: str) -> dict[str, dict]:
+    """student_id -> {status, error, updated_at} for one assignment."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT student_id, status, error, updated_at FROM grade_errors "
+            "WHERE course_id=? AND coursework_id=?",
+            (course_id, coursework_id),
+        ).fetchall()
+    return {r["student_id"]: dict(r) for r in rows}
+
+
 def list_app_assignments(course_id: str) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(

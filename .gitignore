@@ -27,3 +27,6 @@ data/sheets/*.labeled.png
 
 # OS
 .DS_Store
+
+# One-off local DB backups — never commit
+data/backups/

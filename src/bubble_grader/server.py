@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
@@ -22,7 +22,14 @@ from .classroom import (
     list_roster,
     list_submissions,
 )
-from .config import AUTO_GRADE_ON_TURNIN, AUTO_GRADE_TOKEN, FERNET_KEY, IS_VERCEL, SERVER_PORT
+from .config import (
+    ALLOWED_TEACHERS,
+    AUTO_GRADE_ON_TURNIN,
+    AUTO_GRADE_TOKEN,
+    FERNET_KEY,
+    IS_VERCEL,
+    SERVER_PORT,
+)
 from .google_auth import (
     authorization_url,
     credentials_to_dict,
@@ -89,10 +96,19 @@ def _pop_flash(request: Request) -> dict | None:
     return request.session.pop("flash", None)
 
 
+def _is_allowed(email: str | None) -> bool:
+    """Sign-in allowlist. An empty ALLOWED_TEACHERS means open (local use)."""
+    return bool(email) and (not ALLOWED_TEACHERS or email.lower() in ALLOWED_TEACHERS)
+
+
 def _require(request: Request) -> str | RedirectResponse:
     """Return the signed-in email, or a redirect to '/' if not signed in."""
     email = _email(request)
     if not email:
+        return RedirectResponse("/", status_code=303)
+    if not _is_allowed(email):
+        # Covers sessions minted before the allowlist existed (or was edited).
+        request.session.clear()
         return RedirectResponse("/", status_code=303)
     return email
 
@@ -108,7 +124,7 @@ def _render(request: Request, name: str, **ctx: Any):
         {
             "signed_in_as": _email(request),
             "flash": _pop_flash(request),
-            "update_available": update.available,
+            "update_available": update.available and not IS_VERCEL,
             "update_command": "uv run bubble-grader update",
             **ctx,
         },
@@ -144,6 +160,12 @@ def oauth_callback(request: Request):
             "No refresh_token returned. Revoke app access in your Google account and try again.",
         )
     email = email_from_credentials(creds)
+    if not _is_allowed(email):
+        # Turn strangers away at the door; never store their credentials.
+        _flash(request, "bad",
+               f"{email} isn't authorized to use this grader. "
+               "Ask the admin to add you to the teacher list.")
+        return RedirectResponse("/", status_code=303)
     dbmod.store_credentials(email, credentials_to_dict(creds))
     request.session["email"] = email
     _flash(request, "ok", f"Signed in as {email}.")
@@ -579,6 +601,8 @@ def assignment_view(request: Request, course_id: str, cw_id: str, test: str | No
         if sid:
             graded.setdefault(sid, r)
 
+    grade_errs = dbmod.list_grade_errors(course_id, cw_id)
+
     rows = []
     for student in roster:
         sid = student["userId"]
@@ -593,6 +617,7 @@ def assignment_view(request: Request, course_id: str, cw_id: str, test: str | No
             "name": name,
             "email": emailv,
             "classroom_state": cls_state.get(sid, "—"),
+            "grade_error": grade_errs.get(sid),
             "partial": partial,
             "composite": g.get("composite") if g else None,
             "section_scaled": _section_scaled_summary(score),
@@ -1046,6 +1071,26 @@ def student_detail_view(request: Request, course_id: str, cw_id: str, student_id
         flagged=flagged,
         section_options=_SECTION_OPTIONS,
         overrides_log=score.get("overrides") or [],
+    )
+
+
+@app.get("/courses/{course_id}/coursework/{cw_id}/students/{student_id}/overlay.pdf")
+def student_overlay_pdf(request: Request, course_id: str, cw_id: str, student_id: str):
+    """The marked-up sheet (green = correct, red X = missed), viewable in-browser
+    — same rendering the feedback email attaches, without having to send one."""
+    email = _require(request)
+    if isinstance(email, RedirectResponse):
+        return email
+    from .feedback import build_overlay_for_student
+    try:
+        pdf, err = build_overlay_for_student(email, course_id, cw_id, student_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"Overlay failed: {type(e).__name__}: {e}")
+    if pdf is None:
+        raise HTTPException(404, err or "No overlay available.")
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=marked_up_sheet.pdf"},
     )
 
 

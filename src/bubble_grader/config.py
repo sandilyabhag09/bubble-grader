@@ -31,6 +31,15 @@ OAUTH_REDIRECT_URI = os.environ.get(
 )
 SERVER_PORT = int(os.environ.get("SERVER_PORT") or "8765")
 
+# Sign-in allowlist: comma-separated Google emails. Empty = anyone can sign in
+# (fine for a laptop; set it on any public deployment). Non-listed accounts are
+# turned away at sign-in and their credentials are never stored.
+ALLOWED_TEACHERS = {
+    e.strip().lower()
+    for e in (os.environ.get("ALLOWED_TEACHERS") or "").split(",")
+    if e.strip()
+}
+
 # Local-only auto-grader: when truthy, a background poller grades work as it's
 # turned in (see auto_grade.py). Off by default; intended for a local machine.
 AUTO_GRADE_ON_TURNIN = os.environ.get("AUTO_GRADE_ON_TURNIN", "").strip().lower() in (

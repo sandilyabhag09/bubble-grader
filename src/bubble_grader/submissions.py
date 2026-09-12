@@ -314,6 +314,23 @@ def grade_classroom_assignment(
             except OSError:
                 pass
 
+    # Remember failures so the assignment page can say WHY a student has no
+    # score; success wipes any stale note. Never let bookkeeping break grading.
+    for r in results:
+        try:
+            sid = r.get("student_id")
+            if not sid:
+                continue
+            if r.get("status") == "graded":
+                dbmod.clear_grade_error(course_id, coursework_id, sid)
+            else:
+                dbmod.record_grade_error(
+                    course_id, coursework_id, sid,
+                    status=r.get("status") or "failed", error=r.get("error"),
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
     return {
         "test_id": test_id,
         "course_id": course_id,

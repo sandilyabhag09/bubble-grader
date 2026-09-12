@@ -15,6 +15,10 @@
     <div style="text-align: right;">
       <div class="muted">composite</div>
       <div style="font-size: 32px; font-weight: 700;">{{ composite if composite is not none else "—" }}<span class="muted" style="font-size:16px; font-weight:400;">/36</span></div>
+      <a class="btn secondary" style="margin-top: 8px;" target="_blank"
+         href="/courses/{{ course.id }}/coursework/{{ cw.id }}/students/{{ student_id }}/overlay.pdf">
+        View marked-up sheet ↗
+      </a>
     </div>
   </div>
 
