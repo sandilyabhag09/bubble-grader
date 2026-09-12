@@ -14,9 +14,11 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "jinja2>=3.1.6",
     "numpy>=2.4.6",
-    # 4.11+ dropped macOS 12 (Monterey) wheels; pin under that so older
-    # teacher Macs still get a precompiled wheel and don't try to build.
-    "opencv-python>=4.10,<4.11",
+    # Headless build: no GUI functions are used anywhere, it's ~half the
+    # size, and it runs on servers with no display libraries (libGL) — which
+    # is what serverless hosting provides. 4.11+ dropped macOS 12 (Monterey)
+    # wheels; pin under that so older teacher Macs still get a wheel.
+    "opencv-python-headless>=4.10,<4.11",
     "pillow>=12.2.0",
     # psycopg's `[binary]` extra ships a precompiled libpq so the teacher
     # doesn't need PostgreSQL client libs installed. Only used when
