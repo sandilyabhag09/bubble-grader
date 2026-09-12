@@ -8,9 +8,16 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
+# Serverless detection: Vercel sets VERCEL=1. There we must not start
+# background threads, and the filesystem is read-only outside /tmp.
+IS_VERCEL = bool(os.environ.get("VERCEL"))
+
 CLIENT_SECRET_PATH = PROJECT_ROOT / "secrets" / "client_secret.json"
 DATA_DIR = PROJECT_ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
+try:
+    DATA_DIR.mkdir(exist_ok=True)
+except OSError:
+    pass  # read-only deploy bundle — the dir ships with the repo anyway
 DB_PATH = DATA_DIR / "bubble_grader.db"
 
 FERNET_KEY = os.environ.get("FERNET_KEY", "").encode() or None

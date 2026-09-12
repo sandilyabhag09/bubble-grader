@@ -6,6 +6,7 @@ import os
 # This stops google-auth-oauthlib from raising on the scope mismatch.
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
+import json
 import secrets as secrets_mod
 
 from google.auth.transport.requests import Request as GoogleRequest
@@ -17,6 +18,16 @@ from .config import CLIENT_SECRET_PATH, OAUTH_REDIRECT_URI, SCOPES
 
 
 def build_flow(state: str | None = None) -> Flow:
+    # Hosted deploys can't ship secrets/client_secret.json (it's gitignored),
+    # so they provide the same JSON via the GOOGLE_CLIENT_SECRET_JSON env var.
+    raw = os.environ.get("GOOGLE_CLIENT_SECRET_JSON", "").strip()
+    if raw:
+        return Flow.from_client_config(
+            json.loads(raw),
+            scopes=SCOPES,
+            redirect_uri=OAUTH_REDIRECT_URI,
+            state=state,
+        )
     return Flow.from_client_secrets_file(
         str(CLIENT_SECRET_PATH),
         scopes=SCOPES,

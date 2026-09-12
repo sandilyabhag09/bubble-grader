@@ -1,0 +1,23 @@
+# Serverless (Vercel) runtime dependencies — a slim subset of pyproject.toml.
+# Local installs keep using `uv sync` + pyproject; this file exists so Vercel's
+# Python builder can pip-install just what the web server needs.
+#
+# Deliberately absent:
+#   opencv-python  -> replaced by the smaller -headless build (no GUI libs)
+#   pytesseract    -> answer-key OCR import is a local-only feature
+#   pypdf, click   -> CLI-only
+#   uvicorn        -> Vercel provides the ASGI server
+fastapi>=0.116
+itsdangerous>=2.2
+jinja2>=3.1
+numpy>=2
+opencv-python-headless>=4.10
+pillow>=10
+psycopg[binary]>=3.2
+pypdfium2>=4
+google-api-python-client>=2.150
+google-auth>=2.35
+google-auth-oauthlib>=1.2
+python-dotenv>=1
+python-multipart>=0.0.18
+cryptography>=43
