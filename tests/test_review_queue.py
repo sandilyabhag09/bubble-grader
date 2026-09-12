@@ -46,24 +46,21 @@ def test_true_blanks_are_included_with_crops():
     the teacher confirms it's really blank instead of trusting the reader."""
     rr = _read_result({1: ("BLANK", 0.03, 0.01), 2: ("A", 0.7, 0.0)})
     (sus,) = _review_suspects(rr, _template())
-    assert sus["q"] == 1 and "left blank" in sus["reason"] and sus["crop_b64"]
+    assert sus["q"] == 1 and "read as BLANK" in sus["reason"] and sus["crop_b64"]
 
 
-def test_faint_blank_multi_and_borderline_are_flagged():
+def test_only_blank_and_multi_are_flagged():
     rr = _read_result({
-        1: ("BLANK", 0.15, 0.05),   # faint mark read as blank
+        1: ("BLANK", 0.15, 0.05),   # blank (even a faint one is just "blank")
         2: ("MULTI", 0.45, 0.40),   # two marks
-        3: ("A", 0.33, 0.05),       # committed but under SOLID_FILL
-        4: ("A", 0.60, 0.25),       # committed but dark runner-up
-        5: ("A", 0.70, 0.03),       # clean — must NOT appear
+        3: ("A", 0.33, 0.05),       # committed, weak — trusted, NOT shown
+        4: ("A", 0.60, 0.25),       # committed, dark runner-up — trusted, NOT shown
+        5: ("A", 0.70, 0.03),       # clean
     })
     out = _review_suspects(rr, _template())
-    flagged_qs = {s["q"] for s in out}
-    assert flagged_qs == {1, 2, 3, 4}
-    # multi + faint blank outrank borderline singles
-    assert {s["q"] for s in out[:2]} == {1, 2}
-    for s in out:
-        assert s["reason"] and s["section"] == "Test 1"
+    assert [s["q"] for s in out] == [2, 1]          # multi first, then blank
+    assert "MULTI" in out[0]["reason"] and "BLANK" in out[1]["reason"]
+    assert not any(ch.isdigit() for ch in out[1]["reason"].split("BLANK")[1])  # no fill numbers
 
 
 def test_crops_are_valid_jpegs():

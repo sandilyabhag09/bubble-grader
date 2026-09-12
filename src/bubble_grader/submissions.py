@@ -209,21 +209,20 @@ def _resolve_reference(template_path: Path) -> Path:
     return template_path.parent / ref_name
 
 
-# Review-queue tuning: which reader decisions deserve a human glance.
+# Review queue: only the rows that cost the student a point (BLANK / MULTI).
+# Borderline-but-committed answers are deliberately NOT surfaced — teachers
+# found "kept B, but it was close" more confusing than helpful.
 REVIEW_MAX_ITEMS = 20
-REVIEW_BLANK_ATTENTION = 0.12   # a "blank" with this much fill might be a faint mark
-REVIEW_RUNNERUP_ATTENTION = 0.20  # a chosen answer with a runner-up this dark is worth a look
 
 
 def _review_suspects(read_result: dict, template: dict, max_items: int = REVIEW_MAX_ITEMS) -> list[dict]:
-    """Borderline reader decisions, each with a cropped image of the row.
+    """BLANK and MULTI rows, each with a cropped image of the row.
 
-    The reader already resolves these with thresholds; this surfaces the calls
-    that were CLOSE so the teacher can adjudicate from a picture instead of
-    hunting down the paper. Returned entries go into score["review"].
+    These are the calls that cost points, so the teacher confirms each from a
+    picture (and types the real answer if the reader was wrong). Returned
+    entries go into score["review"]; the reader's committed answers are trusted
+    and never listed here.
     """
-    from .omr import SOLID_FILL
-
     fills = read_result.get("fills") or {}
     answers = read_result.get("answers") or {}
     warped = read_result.get("warped")
@@ -237,37 +236,22 @@ def _review_suspects(read_result: dict, template: dict, max_items: int = REVIEW_
 
     suspects: list[dict] = []
     for q in sorted(fills):
-        ranked = sorted(fills[q], key=lambda o: -o["fill"])
-        top = ranked[0]["fill"] if ranked else 0.0
-        second = ranked[1]["fill"] if len(ranked) > 1 else 0.0
         given = answers.get(q)
-
-        # Every BLANK and MULTI costs the student a point, so each one gets a
-        # picture — the teacher confirms "yes, really blank" at a glance.
         if given == "MULTI":
-            reason = f"read as MULTI (two marks at {top:.2f} / {second:.2f})"
-            severity = 0
-        elif given == "BLANK" and top >= REVIEW_BLANK_ATTENTION:
-            reason = f"read as BLANK, but one bubble shows fill {top:.2f} — faint mark?"
+            reason = "read as MULTI (two marks) — enter the intended answer"
             severity = 0
         elif given == "BLANK":
-            reason = "left blank (no mark detected)"
+            reason = "read as BLANK — confirm, or enter the answer if a mark is there"
             severity = 1
-        elif isinstance(given, str) and (top < SOLID_FILL or second >= REVIEW_RUNNERUP_ATTENTION):
-            reason = f"kept {given}, but it was close (top {top:.2f}, runner-up {second:.2f})"
-            severity = 2
         else:
             continue
-
         section, q_in_test = meta.get(q, (None, None))
         suspects.append({
             "q": q, "section": section, "q_in_test": q_in_test,
-            "given": given, "reason": reason,
-            "top_fill": round(top, 3), "second_fill": round(second, 3),
-            "_severity": severity,
+            "given": given, "reason": reason, "_severity": severity,
         })
 
-    # Multis and faint blanks first, then true blanks, then borderline keeps.
+    # Multis first (an intended answer exists), then blanks.
     suspects.sort(key=lambda d: (d["_severity"], d["section"] or "", d["q_in_test"] or 0))
     suspects = suspects[:max_items]
 
