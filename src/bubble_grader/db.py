@@ -555,6 +555,30 @@ def get_student_scan(course_id: str, coursework_id: str, student_id: str) -> dic
     return d
 
 
+def list_student_scans(course_id: str, coursework_id: str, student_id: str) -> list[dict]:
+    """Every successfully-downloaded scan for one student, newest first.
+
+    Students photographing their sheet often attach several shots; grading
+    tries each until one reads cleanly, so a blurry first photo no longer
+    fails the whole submission."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM scan_files
+            WHERE course_id = ? AND coursework_id = ? AND student_id = ?
+              AND content IS NOT NULL
+            ORDER BY fetched_at DESC, file_id
+            """,
+            (course_id, coursework_id, student_id),
+        ).fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        d["content"] = bytes(d["content"])
+        out.append(d)
+    return out
+
+
 def list_scan_students(course_id: str, coursework_id: str) -> dict[str, dict]:
     """Manifest-shaped view of stored scans: {student_id: {…, files: […]}}.
 

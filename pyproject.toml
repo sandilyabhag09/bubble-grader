@@ -19,6 +19,8 @@ dependencies = [
     # is what serverless hosting provides. 4.11+ dropped macOS 12 (Monterey)
     # wheels; pin under that so older teacher Macs still get a wheel.
     "opencv-python-headless>=4.10,<4.11",
+    # Decodes iPhone HEIC photos (registered as a PIL plugin at use time).
+    "pillow-heif>=0.16",
     "pillow>=12.2.0",
     # psycopg's `[binary]` extra ships a precompiled libpq so the teacher
     # doesn't need PostgreSQL client libs installed. Only used when

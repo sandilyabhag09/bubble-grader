@@ -98,9 +98,12 @@ def fetch_assignment(
             file_id = df["id"]
             try:
                 content, meta = download_file_bytes(email, file_id)
+                content, mime, fname = _normalize_scan(
+                    content, meta.get("mimeType"), meta.get("name")
+                )
                 dbmod.store_scan_file(
                     course_id, coursework_id, student_id, file_id,
-                    name=meta.get("name"), mime=meta.get("mimeType"),
+                    name=fname, mime=mime,
                     content=content, error=None, **row_meta,
                 )
                 files.append(
@@ -127,6 +130,35 @@ def fetch_assignment(
         }
 
     return manifest
+
+
+_HEIC_MIMES = {"image/heic", "image/heif"}
+
+
+def _normalize_scan(
+    content: bytes, mime: str | None, name: str | None
+) -> tuple[bytes, str | None, str | None]:
+    """Convert formats the OMR reader can't open into ones it can.
+
+    iPhones default to HEIC, which neither OpenCV nor pypdfium2 decode —
+    convert to JPEG at store time so everything downstream just works.
+    Unknown formats pass through untouched.
+    """
+    is_heic = (mime or "").lower() in _HEIC_MIMES or (name or "").lower().endswith(
+        (".heic", ".heif")
+    )
+    if not is_heic:
+        return content, mime, name
+    import io
+    import pillow_heif
+    from PIL import Image
+
+    pillow_heif.register_heif_opener()
+    img = Image.open(io.BytesIO(content))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=92)
+    new_name = (name.rsplit(".", 1)[0] if name else "scan") + ".jpg"
+    return buf.getvalue(), "image/jpeg", new_name
 
 
 def scan_to_tempfile(scan: dict) -> str:
@@ -258,8 +290,8 @@ def grade_classroom_assignment(
             })
             continue
 
-        scan = dbmod.get_student_scan(course_id, coursework_id, student_id)
-        if scan is None:
+        scans = dbmod.list_student_scans(course_id, coursework_id, student_id)
+        if not scans:
             results.append({
                 "student_id": student_id,
                 "name": info.get("name"),
@@ -269,9 +301,35 @@ def grade_classroom_assignment(
                 "error": "scan not in database (fetch again)",
             })
             continue
-        tmp_path = scan_to_tempfile(scan)
+
+        # Try every attached file until one reads — a blurry first photo
+        # shouldn't sink a submission whose second shot is fine.
+        read_result, used_scan, read_errors = None, None, []
+        for scan in scans:
+            tmp_path = scan_to_tempfile(scan)
+            try:
+                read_result = read_sheet_fm(tmp_path, template_path, reference_path)
+                used_scan = scan
+                break
+            except Exception as e:  # noqa: BLE001 — try the next file
+                read_errors.append(f"{scan.get('name') or scan.get('file_id')}: {type(e).__name__}: {e}")
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+        if read_result is None:
+            results.append({
+                "student_id": student_id,
+                "name": info.get("name"),
+                "email": info.get("email"),
+                "file": scans[0].get("name"),
+                "status": "grade_failed",
+                "error": f"none of {len(scans)} file(s) readable — " + " | ".join(read_errors),
+            })
+            continue
+
         try:
-            read_result = read_sheet_fm(tmp_path, template_path, reference_path)
             answers = {int(k): v for k, v in read_result["answers"].items()}
             # Grade against the scored-only answer key — field-test answers live
             # separately and can never affect the score.
@@ -293,7 +351,7 @@ def grade_classroom_assignment(
                 "student_id": student_id,
                 "name": info.get("name"),
                 "email": info.get("email"),
-                "file": chosen.get("name"),
+                "file": used_scan.get("name"),
                 "status": "graded",
                 "composite": report.get("composite"),
                 "submission_id": sub_id,
@@ -304,15 +362,10 @@ def grade_classroom_assignment(
                 "student_id": student_id,
                 "name": info.get("name"),
                 "email": info.get("email"),
-                "file": chosen.get("name"),
+                "file": used_scan.get("name"),
                 "status": "grade_failed",
                 "error": f"{type(e).__name__}: {e}",
             })
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
     # Remember failures so the assignment page can say WHY a student has no
     # score; success wipes any stale note. Never let bookkeeping break grading.
