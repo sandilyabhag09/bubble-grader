@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
@@ -22,7 +22,7 @@ from .classroom import (
     list_roster,
     list_submissions,
 )
-from .config import AUTO_GRADE_ON_TURNIN, FERNET_KEY, SERVER_PORT
+from .config import AUTO_GRADE_ON_TURNIN, FERNET_KEY, IS_VERCEL, SERVER_PORT
 from .google_auth import (
     authorization_url,
     credentials_to_dict,
@@ -42,10 +42,13 @@ from .version_check import snapshot as update_snapshot, start_background_poller
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     dbmod.init_db()
-    start_background_poller()
-    if AUTO_GRADE_ON_TURNIN:
-        from .auto_grade import start_auto_grade_poller
-        start_auto_grade_poller()
+    if not IS_VERCEL:
+        # Background threads make no sense on serverless — requests are the
+        # only execution there. Locally they behave exactly as before.
+        start_background_poller()
+        if AUTO_GRADE_ON_TURNIN:
+            from .auto_grade import start_auto_grade_poller
+            start_auto_grade_poller()
     yield
 
 
@@ -661,6 +664,138 @@ def assignment_grade(
     return RedirectResponse(
         f"/courses/{course_id}/coursework/{cw_id}", status_code=303
     )
+
+
+# ----- chunked grade + feedback (one student per request) -------------------
+#
+# Serverless hosting caps how long one request may run, so the browser drives
+# the loop instead: /grade/start returns the student list, then the page calls
+# /grade/student once per student with a progress bar. Feedback emails work the
+# same way, with /feedback/complete ending the cycle (scan cleanup).
+
+def _require_json(request: Request):
+    email = _require(request)
+    if isinstance(email, RedirectResponse):
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+    return email
+
+
+@app.post("/courses/{course_id}/coursework/{cw_id}/grade/start")
+def assignment_grade_start(
+    request: Request, course_id: str, cw_id: str, test_id: str = Form(""),
+):
+    email = _require_json(request)
+    if isinstance(email, JSONResponse):
+        return email
+    if not test_id:
+        owned = dbmod.get_app_assignment(course_id, cw_id)
+        test_id = (owned or {}).get("test_id") or ""
+    if not test_id:
+        return JSONResponse({"error": "No test selected to grade against."}, status_code=400)
+    if dbmod.get_test(test_id) is None:
+        return JSONResponse({"error": f"Unknown test {test_id!r}."}, status_code=400)
+
+    # Remember the choice on the assignment so it defaults next visit.
+    owned = dbmod.get_app_assignment(course_id, cw_id)
+    if owned is not None:
+        dbmod.record_app_assignment(
+            course_id, cw_id, test_id=test_id, title=owned.get("title"),
+        )
+
+    try:
+        roster = {s["userId"]: s for s in list_roster(email, course_id)}
+        subs = list_submissions(email, course_id, cw_id)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+
+    students = []
+    for s in subs:
+        if s.get("state") not in ("TURNED_IN", "RETURNED"):
+            continue
+        sid = s.get("userId")
+        profile = (roster.get(sid) or {}).get("profile") or {}
+        students.append({
+            "student_id": sid,
+            "name": (profile.get("name") or {}).get("fullName") or sid,
+        })
+    return {"test_id": test_id, "students": students}
+
+
+@app.post("/courses/{course_id}/coursework/{cw_id}/grade/student")
+def assignment_grade_student(
+    request: Request, course_id: str, cw_id: str,
+    student_id: str = Form(...), test_id: str = Form(""),
+):
+    email = _require_json(request)
+    if isinstance(email, JSONResponse):
+        return email
+    if not test_id:
+        owned = dbmod.get_app_assignment(course_id, cw_id)
+        test_id = (owned or {}).get("test_id") or ""
+    if not test_id:
+        return JSONResponse({"error": "No test selected."}, status_code=400)
+
+    from .submissions import template_for_test
+    tpl_path, _ref = template_for_test(test_id)
+    try:
+        result = grade_classroom_assignment(
+            email, course_id, cw_id,
+            test_id=test_id, template_path=str(tpl_path),
+            only_students=[student_id],
+        )
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
+    r = next(iter(result["results"]), None) or {"status": "no_classroom_submission"}
+    return {
+        "student_id": student_id,
+        "status": r.get("status"),
+        "composite": r.get("composite"),
+        "error": r.get("error"),
+    }
+
+
+@app.post("/courses/{course_id}/coursework/{cw_id}/feedback/student")
+def assignment_feedback_student(
+    request: Request, course_id: str, cw_id: str,
+    student_id: str = Form(...), teacher_name: str = Form(""),
+):
+    email = _require_json(request)
+    if isinstance(email, JSONResponse):
+        return email
+    owned = dbmod.get_app_assignment(course_id, cw_id) or {}
+    test_obj = dbmod.get_test(owned.get("test_id")) if owned.get("test_id") else None
+    try:
+        result = send_feedback_for_assignment(
+            email, course_id, cw_id,
+            test_name=(test_obj or {}).get("name"),
+            only_students=[student_id],
+            teacher_name=teacher_name.strip() or None,
+            delete_scans=False,  # the cycle ends via /feedback/complete
+        )
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
+    r = next(iter(result["results"]), None) or {"status": "no_graded_submission"}
+    return {
+        "student_id": student_id,
+        "status": r.get("status"),
+        "attached_overlay": bool(r.get("attached_overlay")),
+        "error": r.get("error") or r.get("overlay_error"),
+    }
+
+
+@app.post("/courses/{course_id}/coursework/{cw_id}/feedback/complete")
+def assignment_feedback_complete(request: Request, course_id: str, cw_id: str):
+    """End of a grading cycle: drop the assignment's stored scans."""
+    email = _require_json(request)
+    if isinstance(email, JSONResponse):
+        return email
+    return {"scans_deleted": dbmod.delete_assignment_scans(course_id, cw_id)}
+
+
+@app.get("/healthz")
+def healthz():
+    """Ultra-cheap liveness endpoint for keep-warm pingers. No auth, no DB."""
+    return {"ok": True}
 
 
 @app.post("/courses/{course_id}/coursework/{cw_id}/release")

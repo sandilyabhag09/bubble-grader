@@ -39,8 +39,10 @@
         <p class="muted">No tests registered yet — <a href="/tests">add one</a> first.</p>
       {% endif %}
       <div style="margin-top: 16px;">
-        <button class="btn" type="submit" {% if not tests %}disabled{% endif %}>Fetch + grade all turned-in</button>
+        <button class="btn" type="button" id="grade-btn" onclick="gradeAll()"
+                {% if not tests %}disabled{% endif %}>Fetch + grade all turned-in</button>
       </div>
+      <div id="grade-progress" class="muted" style="display:none; margin-top: 12px; font-weight: 500;"></div>
     </form>
   </div>
 
@@ -123,12 +125,12 @@
           {% else %}
             <span class="pill warn" title="Created in Classroom UI — Google API rejects grade writes">grade release disabled (not app-owned)</span>
           {% endif %}
-          <button class="btn secondary" type="submit"
-                  formaction="/courses/{{ course.id }}/coursework/{{ cw.id }}/feedback"
+          <button class="btn secondary" type="button" id="feedback-btn" onclick="sendFeedback()"
                   title="Email each selected student their per-section score + missed questions">
             Send feedback emails
           </button>
         </div>
+        <div id="feedback-progress" class="muted" style="display:none; margin-top: 12px; font-weight: 500;"></div>
       </form>
     {% endif %}
   </div>
@@ -153,6 +155,99 @@
   </div>
 
 <script>
+  // ---- chunked grade + feedback -------------------------------------------
+  // One student per request so each call stays well under serverless time
+  // limits; the browser drives the loop and shows progress.
+  const BASE = "/courses/{{ course.id }}/coursework/{{ cw.id }}";
+
+  async function postForm(url, data) {
+    const resp = await fetch(url, { method: "POST", body: new URLSearchParams(data || {}) });
+    if (resp.status === 401) { window.location.href = "/"; throw new Error("signed out"); }
+    return await resp.json();
+  }
+
+  function setProgress(id, msg) {
+    const el = document.getElementById(id);
+    if (el) { el.style.display = msg ? "" : "none"; el.textContent = msg || ""; }
+  }
+
+  function setBusy(busy) {
+    for (const id of ["grade-btn", "feedback-btn"]) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = busy;
+    }
+  }
+
+  async function gradeAll() {
+    const sel = document.querySelector("select[name=test_id]");
+    const testId = sel ? sel.value : "";
+    if (!testId) { alert("Pick a test to grade against first."); return; }
+    setBusy(true);
+    setProgress("grade-progress", "Fetching the class list from Classroom…");
+    try {
+      const start = await postForm(`${BASE}/grade/start`, { test_id: testId });
+      if (start.error) { setProgress("grade-progress", `Error: ${start.error}`); setBusy(false); return; }
+      const students = start.students || [];
+      if (!students.length) {
+        setProgress("grade-progress", "No turned-in submissions to grade yet.");
+        setBusy(false); return;
+      }
+      let graded = 0, failed = 0;
+      for (let i = 0; i < students.length; i++) {
+        const s = students[i];
+        setProgress("grade-progress",
+          `Grading ${i + 1}/${students.length} — ${s.name}…` + (failed ? ` (${failed} failed so far)` : ""));
+        try {
+          const r = await postForm(`${BASE}/grade/student`, { student_id: s.student_id, test_id: testId });
+          if (r.status === "graded") graded++; else failed++;
+        } catch (e) { failed++; }
+      }
+      window.location.href = window.location.pathname + `#graded=${graded}/${students.length},failed=${failed}`;
+      window.location.reload();
+    } catch (e) {
+      setProgress("grade-progress", `Error: ${e.message || e}`);
+      setBusy(false);
+    }
+  }
+
+  async function sendFeedback() {
+    const ids = Array.from(document.querySelectorAll("input[name=student_ids]:checked:not([disabled])"))
+      .map(c => c.value);
+    if (!ids.length) { alert("No students selected."); return; }
+    const teacherEl = document.querySelector("input[name=teacher_name]");
+    const teacher = teacherEl ? teacherEl.value : "";
+    setBusy(true);
+    let sent = 0, failed = 0, overlays = 0;
+    for (let i = 0; i < ids.length; i++) {
+      setProgress("feedback-progress", `Emailing ${i + 1}/${ids.length}…` + (failed ? ` (${failed} failed)` : ""));
+      try {
+        const r = await postForm(`${BASE}/feedback/student`, { student_id: ids[i], teacher_name: teacher });
+        if (r.status === "sent") { sent++; if (r.attached_overlay) overlays++; } else failed++;
+      } catch (e) { failed++; }
+    }
+    let cleanup = "";
+    if (sent && !failed) {
+      try {
+        const done = await postForm(`${BASE}/feedback/complete`, {});
+        if (done.scans_deleted) cleanup = " Scan files cleaned up.";
+      } catch (e) { /* non-fatal */ }
+    }
+    setProgress("feedback-progress",
+      `Sent ${sent}/${ids.length} email(s) — overlay PDF attached on ${overlays}.` +
+      (failed ? ` ${failed} failed.` : "") + cleanup);
+    setBusy(false);
+  }
+
+  // After a grade run reloads the page, surface the summary from the URL hash.
+  document.addEventListener("DOMContentLoaded", () => {
+    const m = (window.location.hash || "").match(/#graded=(\d+)\/(\d+),failed=(\d+)/);
+    if (m) {
+      const failed = parseInt(m[3], 10);
+      setProgress("grade-progress", `Graded ${m[1]}/${m[2]} students.` + (failed ? ` ${failed} failed — see rows below.` : ""));
+      history.replaceState(null, "", window.location.pathname);
+    }
+  });
+
   // Client-side filter: match name + email columns. Hides rows that don't match.
   function filterStudents(q) {
     q = (q || "").toLowerCase().trim();
