@@ -1,5 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
+  <div class="card">
+    <h3>Import a test from its answer-key PDF</h3>
+    <p class="muted">Upload the official answer-key booklet — Claude reads it, the
+      importer verifies every rule (scored vs not-scored, letter positions, scale
+      table coverage), and you confirm before anything is saved. Costs a few cents.</p>
+    <form method="post" action="/tests/import" enctype="multipart/form-data"
+          onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Reading the booklet… (~1 min)';">
+      <input type="file" name="key_pdf" accept="application/pdf" required>
+      <div style="margin-top: 12px;">
+        <button class="btn" type="submit">Extract &amp; preview</button>
+      </div>
+    </form>
+  </div>
+
   <h1>Tests</h1>
   <p class="muted">
     A "test" pairs an ACT answer key with its raw→scaled conversion table. Add a test once

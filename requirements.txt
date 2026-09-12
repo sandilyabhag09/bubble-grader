@@ -22,3 +22,4 @@ google-auth-oauthlib>=1.2
 python-dotenv>=1
 python-multipart>=0.0.18
 cryptography>=43
+anthropic>=1.0

@@ -1243,6 +1243,102 @@ def tests_view(request: Request):
     return _render(request, "tests.html", tests=dbmod.list_tests())
 
 
+@app.post("/tests/import")
+async def tests_import(request: Request, key_pdf: UploadFile = File(...)):
+    """Upload an official answer-key PDF; Claude extracts, our validator
+    enforces the scored/not-scored split, letter parity, and scaler coverage
+    before anything can be saved. Renders a preview for the teacher to confirm."""
+    email = _require(request)
+    if isinstance(email, RedirectResponse):
+        return email
+    from .config import ANTHROPIC_API_KEY
+    if not ANTHROPIC_API_KEY:
+        _flash(request, "bad",
+               "Key import isn't configured — the server needs an ANTHROPIC_API_KEY "
+               "environment variable (a console.anthropic.com API key).")
+        return RedirectResponse("/tests", status_code=303)
+    data = await key_pdf.read()
+    if len(data) > 25 * 1024 * 1024:
+        _flash(request, "bad", "PDF is over 25 MB — that's not an answer-key booklet.")
+        return RedirectResponse("/tests", status_code=303)
+
+    from .key_import import claude_extract, extract_pdf_text, validate_and_normalize
+    try:
+        text = extract_pdf_text(data)
+        raw = claude_extract(text, ANTHROPIC_API_KEY)
+        norm = validate_and_normalize(raw)
+    except ValueError as e:
+        _flash(request, "bad", f"Import failed: {e}")
+        return RedirectResponse("/tests", status_code=303)
+    except Exception as e:  # noqa: BLE001
+        _flash(request, "bad", f"Import failed: {type(e).__name__}: {e}")
+        return RedirectResponse("/tests", status_code=303)
+
+    sections = []
+    for sec in ["Test 1", "Test 2", "Test 3", "Test 4"]:
+        if sec in norm["answers"]:
+            ft = (norm.get("field_test_answers") or {}).get(sec) or {}
+            sections.append({
+                "label": {"Test 1": "English", "Test 2": "Math",
+                          "Test 3": "Reading", "Test 4": "Science"}[sec],
+                "scored": len(norm["answers"][sec]),
+                "field_test": len(ft),
+                "scaler_max": max(int(k) for k in norm["scaler"][sec]),
+            })
+    payload = base64.urlsafe_b64encode(json.dumps(norm).encode()).decode()
+    return _render(
+        request, "tests_import_preview.html",
+        norm=norm, sections=sections, payload=payload,
+        filename=key_pdf.filename,
+    )
+
+
+@app.post("/tests/import/confirm")
+async def tests_import_confirm(
+    request: Request,
+    payload: str = Form(...),
+    test_id: str = Form(""),
+    test_name: str = Form(""),
+):
+    email = _require(request)
+    if isinstance(email, RedirectResponse):
+        return email
+    from .key_import import sanity_check
+    try:
+        norm = json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
+        sanity_check(norm)
+    except Exception as e:  # noqa: BLE001
+        _flash(request, "bad", f"Import payload failed re-validation: {e}")
+        return RedirectResponse("/tests", status_code=303)
+
+    tid = (test_id or norm.get("test_id_hint") or "").strip()
+    name = (test_name or norm.get("name") or tid).strip()
+    if not tid:
+        _flash(request, "bad", "A test id is required.")
+        return RedirectResponse("/tests", status_code=303)
+    if dbmod.get_test(tid) is not None:
+        _flash(request, "bad", f"A test with id '{tid}' already exists — pick another id.")
+        return RedirectResponse("/tests", status_code=303)
+
+    notes = "Imported from answer-key PDF."
+    if norm.get("test_form"):
+        notes += f" Form {norm['test_form']}."
+    if norm.get("conversions"):
+        notes += (f" {len(norm['conversions'])} letters converted to sheet positions "
+                  "(renumbered booklet).")
+    dbmod.upsert_test(tid, name=name, notes=notes)
+    dbmod.set_test_answer_key(tid, norm["answers"])
+    dbmod.set_test_scaler(tid, norm["scaler"])
+    dbmod.set_test_field_test_answers(tid, norm.get("field_test_answers"))
+    n_scored = sum(len(v) for v in norm["answers"].values())
+    n_ft = sum(len(v) for v in (norm.get("field_test_answers") or {}).values())
+    _flash(request, "ok",
+           f"Imported '{name}' — {n_scored} scored answers"
+           + (f" + {n_ft} field-test (not scored)" if n_ft else "")
+           + ". It's ready in the grade dropdown.")
+    return RedirectResponse("/tests", status_code=303)
+
+
 @app.post("/tests/new")
 async def tests_new(
     request: Request,

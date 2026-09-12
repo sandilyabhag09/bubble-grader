@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="crumbs"><a href="/tests">Tests</a> / Import preview</div>
+  <h1>Confirm imported answer key</h1>
+  <p class="muted">Extracted from <strong>{{ filename }}</strong> and validated
+    (letter parity, scored/not-scored split, full scaler coverage). Nothing is
+    saved until you confirm.</p>
+
+  <div class="card">
+    <h3>Sections</h3>
+    <table>
+      <thead><tr><th>Section</th><th>Scored questions</th><th>Field-test (not scored)</th><th>Scaler max raw</th></tr></thead>
+      <tbody>
+        {% for s in sections %}
+          <tr>
+            <td>{{ s.label }}</td>
+            <td><strong>{{ s.scored }}</strong></td>
+            <td>{{ s.field_test or "—" }}</td>
+            <td>{{ s.scaler_max }} <span class="muted">(= scored ✓)</span></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if norm.warnings %}
+      <div style="margin-top: 12px;">
+        {% for w in norm.warnings %}<div class="pill warn" style="display:block; margin-top:6px;">⚠ {{ w }}</div>{% endfor %}
+      </div>
+    {% endif %}
+    {% if norm.conversions %}
+      <details style="margin-top: 12px;">
+        <summary class="muted">Letter conversions applied ({{ norm.conversions|length }})</summary>
+        <p class="muted" style="font-size: 13px;">{{ norm.conversions|join("; ") }}</p>
+      </details>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <form method="post" action="/tests/import/confirm">
+      <input type="hidden" name="payload" value="{{ payload }}">
+      <div class="row" style="gap: 16px;">
+        <label style="flex: 1;">Test id
+          <input type="text" name="test_id" value="{{ norm.test_id_hint }}" required
+                 pattern="[a-z0-9_]+" title="lowercase letters, digits, underscores">
+        </label>
+        <label style="flex: 1;">Display name
+          <input type="text" name="test_name" value="{{ norm.name }}" required>
+        </label>
+      </div>
+      <div class="row" style="margin-top: 16px; justify-content: flex-end; gap: 8px;">
+        <a class="btn secondary" href="/tests">Cancel</a>
+        <button class="btn" type="submit">Save test</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}

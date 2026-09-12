@@ -40,6 +40,11 @@ ALLOWED_TEACHERS = {
     if e.strip()
 }
 
+# Anthropic API key for the in-app answer-key PDF import (Tests page). This is
+# a standard console.anthropic.com API key — costs pennies per imported test.
+# Unset = the import feature politely says it isn't configured.
+ANTHROPIC_API_KEY = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+
 # Local-only auto-grader: when truthy, a background poller grades work as it's
 # turned in (see auto_grade.py). Off by default; intended for a local machine.
 AUTO_GRADE_ON_TURNIN = os.environ.get("AUTO_GRADE_ON_TURNIN", "").strip().lower() in (
