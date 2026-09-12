@@ -24,6 +24,13 @@ OAUTH_REDIRECT_URI = os.environ.get(
 )
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "8765"))
 
+# Local-only auto-grader: when truthy, a background poller grades work as it's
+# turned in (see auto_grade.py). Off by default; intended for a local machine.
+AUTO_GRADE_ON_TURNIN = os.environ.get("AUTO_GRADE_ON_TURNIN", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+AUTO_GRADE_POLL_SECONDS = int(os.environ.get("AUTO_GRADE_POLL_SECONDS", "60"))
+
 # Order matters less than completeness. Strings must match exactly what's
 # registered in the Google Auth Platform "Data Access" page.
 SCOPES = [

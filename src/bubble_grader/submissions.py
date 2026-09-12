@@ -30,15 +30,22 @@ def fetch_assignment(
     course_id: str,
     coursework_id: str,
     only_turned_in: bool = True,
+    only_students: list[str] | None = None,
 ) -> dict:
     """Download all Drive attachments for the assignment's submissions.
 
     Layout under data/submissions/<course_id>/<coursework_id>/:
       manifest.json
       <student_id>/<file_id>.<ext>
+
+    ``only_students`` (a list of student ids) restricts the download/manifest to
+    those students — used by auto-grade to fetch just the newly turned-in work.
     """
     roster = {s["userId"]: s for s in list_roster(email, course_id)}
     submissions = list_submissions(email, course_id, coursework_id)
+    if only_students:
+        wanted = set(only_students)
+        submissions = [s for s in submissions if s.get("userId") in wanted]
     if only_turned_in:
         # Both TURNED_IN (newly submitted) and RETURNED (already-graded-and-returned)
         # have the student's attached work and are gradeable. Without RETURNED here,
@@ -143,6 +150,7 @@ def grade_classroom_assignment(
     *,
     only_turned_in: bool = True,
     refetch: bool = True,
+    only_students: list[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch → read → grade → persist for every student in one assignment.
 
@@ -171,7 +179,8 @@ def grade_classroom_assignment(
 
     if refetch:
         manifest = fetch_assignment(
-            email, course_id, coursework_id, only_turned_in=only_turned_in
+            email, course_id, coursework_id,
+            only_turned_in=only_turned_in, only_students=only_students,
         )
     else:
         manifest_path = (
@@ -183,8 +192,11 @@ def grade_classroom_assignment(
             )
         manifest = json.loads(manifest_path.read_text())
 
+    wanted_students = set(only_students) if only_students else None
     results: list[dict] = []
     for student_id, info in manifest["students"].items():
+        if wanted_students is not None and student_id not in wanted_students:
+            continue
         files = info.get("files", []) or []
         if not files:
             results.append({
@@ -213,6 +225,8 @@ def grade_classroom_assignment(
         try:
             read_result = read_sheet_fm(file_path, template_path, reference_path)
             answers = {int(k): v for k, v in read_result["answers"].items()}
+            # Grade against the scored-only answer key — field-test answers live
+            # separately and can never affect the score.
             report = full_grade(answers, template, test["answer_key"], test["scaler"])
             if scope and scope.get("type") == "partial":
                 report["partial"] = partial_summary(report, scope)
