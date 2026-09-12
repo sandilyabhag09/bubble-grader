@@ -16,17 +16,17 @@ didn't earn credit — the same set listed as "Missed questions" in the body.
 
 import io
 import json
+import os
 import tempfile
 from pathlib import Path
 
-import cv2
-from PIL import Image
-
 from . import db as dbmod
-from .config import DATA_DIR
 from .gmail import send_email
-from .omr import read_sheet_fm
 from .scoring import grade_answers, merge_field_test
+
+# NOTE: cv2 / PIL / the OMR reader are imported lazily inside
+# build_overlay_pdf so that importing this module (and the web server)
+# stays fast on serverless cold starts.
 
 
 SECTION_DISPLAY = {
@@ -163,23 +163,31 @@ def _build_partial_report(
     )
 
 
-def _student_scan_path(course_id: str, coursework_id: str, student_id: str) -> Path | None:
-    """Look up the most recently fetched scan file for a student from the manifest."""
-    manifest_path = (
-        DATA_DIR / "submissions" / course_id / coursework_id / "manifest.json"
-    )
-    if not manifest_path.exists():
+def _student_scan_tempfile(
+    teacher_email: str, course_id: str, coursework_id: str, student_id: str
+) -> str | None:
+    """Materialize the student's scan as a temp file for the overlay renderer.
+
+    Scans normally sit in the DB scan store. If this assignment's grading
+    cycle already deleted them, quietly refetch just this student's file from
+    Drive — the original always lives there — and store it again. Returns a
+    temp-file path (caller unlinks) or None if no scan can be had.
+    """
+    scan = dbmod.get_student_scan(course_id, coursework_id, student_id)
+    if scan is None:
+        from .submissions import fetch_assignment
+        try:
+            fetch_assignment(
+                teacher_email, course_id, coursework_id,
+                only_students=[student_id],
+            )
+        except Exception:  # noqa: BLE001 — fall through to "no scan"
+            return None
+        scan = dbmod.get_student_scan(course_id, coursework_id, student_id)
+    if scan is None:
         return None
-    try:
-        manifest = json.loads(manifest_path.read_text())
-    except Exception:  # noqa: BLE001
-        return None
-    info = (manifest.get("students") or {}).get(student_id) or {}
-    files = [f for f in info.get("files", []) if "error" not in f and f.get("path")]
-    if not files:
-        return None
-    path = DATA_DIR / files[0]["path"]
-    return path if path.exists() else None
+    from .submissions import scan_to_tempfile
+    return scan_to_tempfile(scan)
 
 
 def build_overlay_pdf(
@@ -204,6 +212,10 @@ def build_overlay_pdf(
     When ``details`` is ``None`` we fall back to the legacy behavior of simply
     circling whatever fill the reader detected (no correctness judgment).
     """
+    import cv2  # lazy: heavy imaging deps load only when an overlay is built
+    from PIL import Image
+    from .omr import read_sheet_fm
+
     template = json.loads(template_path.read_text())
     px_per_mm = dpi / 25.4
 
@@ -317,8 +329,15 @@ def send_feedback_for_assignment(
     dry_run: bool = False,
     template_path: Path | str | None = None,
     reference_path: Path | str | None = None,
+    delete_scans: bool = True,
 ) -> dict:
-    """For each graded submission, compose + send (or preview) the student's email."""
+    """For each graded submission, compose + send (or preview) the student's email.
+
+    ``delete_scans``: sending feedback is the end of a grading cycle, so by
+    default the assignment's stored scans are deleted afterwards (only when
+    every selected email actually sent). Chunked per-student callers pass
+    False and delete once at the end of the whole batch instead.
+    """
     # Look up the assignment's scope (partial vs full) so build_report can
     # tailor the email body. Missing app_assignments row = treat as full.
     app_asg = dbmod.get_app_assignment(course_id, coursework_id)
@@ -399,9 +418,9 @@ def send_feedback_for_assignment(
         attachments = []
         overlay_error = None
         if include_overlay and not dry_run:
-            scan_path = _student_scan_path(course_id, coursework_id, sid)
+            scan_path = _student_scan_tempfile(teacher_email, course_id, coursework_id, sid)
             if scan_path is None:
-                overlay_error = "no scan file on disk (run `grade-classroom` first)"
+                overlay_error = "no scan available (not in DB, and Drive refetch failed)"
             else:
                 # Flatten every section's per-question detail (refreshed against
                 # the current key) so the overlay colors each bubble correctly.
@@ -412,12 +431,17 @@ def send_feedback_for_assignment(
                 ]
                 try:
                     pdf_bytes = build_overlay_pdf(
-                        scan_path, template_path, reference_path, details=details
+                        Path(scan_path), template_path, reference_path, details=details
                     )
                     fname = f"{_safe_filename(student_name)}_results.pdf"
                     attachments.append((fname, pdf_bytes, "application/pdf"))
                 except Exception as e:  # noqa: BLE001
                     overlay_error = f"{type(e).__name__}: {e}"
+                finally:
+                    try:
+                        os.unlink(scan_path)
+                    except OSError:
+                        pass
 
         if dry_run:
             results.append({
@@ -442,4 +466,14 @@ def send_feedback_for_assignment(
                 "error": f"{type(e).__name__}: {e}",
             })
 
-    return {"results": results}
+    # End of the grading cycle: once every selected email went out, the stored
+    # scans have served their purpose — drop them to keep the DB tiny. (They
+    # can always be refetched from Drive if feedback is ever re-sent.)
+    scans_deleted = 0
+    if delete_scans and not dry_run:
+        any_sent = any(r["status"] == "sent" for r in results)
+        any_failed = any(r["status"] == "send_failed" for r in results)
+        if any_sent and not any_failed:
+            scans_deleted = dbmod.delete_assignment_scans(course_id, coursework_id)
+
+    return {"results": results, "scans_deleted": scans_deleted}

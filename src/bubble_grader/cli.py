@@ -481,10 +481,7 @@ def cmd_fetch(email: str, course_id: str, cw_id: str, fetch_all: bool) -> None:
     )
     n_students = len(manifest["students"])
     n_files = sum(len(s["files"]) for s in manifest["students"].values())
-    click.echo(f"Downloaded {n_files} file(s) for {n_students} student(s).")
-    click.echo(
-        f"Manifest written to data/submissions/{course_id}/{cw_id}/manifest.json"
-    )
+    click.echo(f"Downloaded {n_files} file(s) for {n_students} student(s) into the DB scan store.")
     # Also dump a brief summary to stdout for quick eyeballing.
     click.echo(json.dumps(
         {

@@ -1,10 +1,18 @@
 """End-to-end fetch: download every Drive attachment for an assignment's submissions.
 
-Writes a manifest.json next to the per-student folders so downstream OMR/grading
-steps can iterate over a deterministic structure without re-hitting the APIs.
+Scans are stored in the DATABASE (scan_files table), not on local disk, so a
+serverless deploy and a laptop install share the same store and a grading
+cycle's files are available wherever the next step runs. Blobs are transient:
+deleted when feedback goes out, purged after two weeks, and refetchable from
+Drive at any time.
+
+The OMR/imaging imports are deliberately lazy so importing this module (and
+therefore the web server) stays fast on serverless cold starts.
 """
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,9 +27,7 @@ from .classroom import (
     patch_grade,
     return_submission,
 )
-from .config import DATA_DIR
-from .drive import download_file, submission_cache_dir
-from .omr import read_sheet_fm
+from .drive import EXT_BY_MIME, download_file_bytes
 from .scoring import full_grade, partial_summary
 
 
@@ -32,15 +38,17 @@ def fetch_assignment(
     only_turned_in: bool = True,
     only_students: list[str] | None = None,
 ) -> dict:
-    """Download all Drive attachments for the assignment's submissions.
+    """Download the assignment's Drive attachments into the DB scan store.
 
-    Layout under data/submissions/<course_id>/<coursework_id>/:
-      manifest.json
-      <student_id>/<file_id>.<ext>
+    Returns a manifest-shaped dict — {"students": {sid: {…, "files": […]}}} —
+    covering just the students processed by THIS call. Rows upsert per
+    student/file, so per-student fetches merge instead of clobbering earlier
+    ones (that's what makes one-student-per-request grading possible).
 
-    ``only_students`` (a list of student ids) restricts the download/manifest to
-    those students — used by auto-grade to fetch just the newly turned-in work.
+    ``only_students`` (a list of student ids) restricts the fetch to those
+    students — used by chunked grading and auto-grade.
     """
+    dbmod.purge_old_scans()  # opportunistic safety net for forgotten cycles
     roster = {s["userId"]: s for s in list_roster(email, course_id)}
     submissions = list_submissions(email, course_id, coursework_id)
     if only_students:
@@ -66,8 +74,15 @@ def fetch_assignment(
 
     for sub in submissions:
         student_id = sub["userId"]
-        student_dir = submission_cache_dir(course_id, coursework_id, student_id)
         profile = roster.get(student_id, {}).get("profile", {})
+        student_name = (profile.get("name") or {}).get("fullName")
+        student_email = profile.get("emailAddress")
+        row_meta = dict(
+            student_name=student_name,
+            student_email=student_email,
+            classroom_submission_id=sub.get("id"),
+            state=sub.get("state"),
+        )
 
         attachments = (
             sub.get("assignmentSubmission", {}).get("attachments", []) or []
@@ -81,31 +96,49 @@ def fetch_assignment(
                 continue
             file_id = df["id"]
             try:
-                path, meta = download_file(email, file_id, student_dir)
+                content, meta = download_file_bytes(email, file_id)
+                dbmod.store_scan_file(
+                    course_id, coursework_id, student_id, file_id,
+                    name=meta.get("name"), mime=meta.get("mimeType"),
+                    content=content, error=None, **row_meta,
+                )
                 files.append(
                     {
                         "file_id": file_id,
                         "name": meta.get("name"),
                         "mime": meta.get("mimeType"),
                         "size": meta.get("size"),
-                        "path": str(path.relative_to(DATA_DIR)),
                     }
                 )
             except HttpError as e:
+                dbmod.store_scan_file(
+                    course_id, coursework_id, student_id, file_id,
+                    content=None, error=str(e), **row_meta,
+                )
                 files.append({"file_id": file_id, "error": str(e)})
 
         manifest["students"][student_id] = {
-            "email": profile.get("emailAddress"),
-            "name": (profile.get("name") or {}).get("fullName"),
+            "email": student_email,
+            "name": student_name,
             "submission_id": sub.get("id"),
             "state": sub.get("state"),
             "files": files,
         }
 
-    cw_dir = DATA_DIR / "submissions" / course_id / coursework_id
-    cw_dir.mkdir(parents=True, exist_ok=True)
-    (cw_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest
+
+
+def scan_to_tempfile(scan: dict) -> str:
+    """Write a scan row's bytes to a temp file the OMR reader can open.
+
+    The reader picks its decoder by extension, so the suffix comes from the
+    stored mime type. Caller is responsible for os.unlink() when done.
+    """
+    ext = EXT_BY_MIME.get(scan.get("mime") or "", "bin")
+    fd, path = tempfile.mkstemp(suffix=f".{ext}")
+    with os.fdopen(fd, "wb") as f:
+        f.write(scan["content"])
+    return path
 
 
 DEFAULT_SHEETS_DIR = Path("data/sheets")
@@ -177,24 +210,25 @@ def grade_classroom_assignment(
     app_asg = dbmod.get_app_assignment(course_id, coursework_id)
     scope = (app_asg or {}).get("scope")
 
+    from .omr import read_sheet_fm  # lazy: keep server cold starts light
+
     if refetch:
         manifest = fetch_assignment(
             email, course_id, coursework_id,
             only_turned_in=only_turned_in, only_students=only_students,
         )
+        students = manifest["students"]
     else:
-        manifest_path = (
-            DATA_DIR / "submissions" / course_id / coursework_id / "manifest.json"
-        )
-        if not manifest_path.exists():
+        students = dbmod.list_scan_students(course_id, coursework_id)
+        if not students:
             raise ValueError(
-                f"No cached manifest at {manifest_path}; pass refetch=True or run `fetch` first."
+                "No cached scans in the database for this assignment; "
+                "pass refetch=True or run `fetch` first."
             )
-        manifest = json.loads(manifest_path.read_text())
 
     wanted_students = set(only_students) if only_students else None
     results: list[dict] = []
-    for student_id, info in manifest["students"].items():
+    for student_id, info in students.items():
         if wanted_students is not None and student_id not in wanted_students:
             continue
         files = info.get("files", []) or []
@@ -221,9 +255,20 @@ def grade_classroom_assignment(
             })
             continue
 
-        file_path = DATA_DIR / chosen["path"]
+        scan = dbmod.get_student_scan(course_id, coursework_id, student_id)
+        if scan is None:
+            results.append({
+                "student_id": student_id,
+                "name": info.get("name"),
+                "email": info.get("email"),
+                "file": chosen.get("name"),
+                "status": "download_failed",
+                "error": "scan not in database (fetch again)",
+            })
+            continue
+        tmp_path = scan_to_tempfile(scan)
         try:
-            read_result = read_sheet_fm(file_path, template_path, reference_path)
+            read_result = read_sheet_fm(tmp_path, template_path, reference_path)
             answers = {int(k): v for k, v in read_result["answers"].items()}
             # Grade against the scored-only answer key — field-test answers live
             # separately and can never affect the score.
@@ -260,6 +305,11 @@ def grade_classroom_assignment(
                 "status": "grade_failed",
                 "error": f"{type(e).__name__}: {e}",
             })
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     return {
         "test_id": test_id,

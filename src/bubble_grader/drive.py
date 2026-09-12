@@ -30,6 +30,17 @@ def file_metadata(email: str, file_id: str) -> dict:
     )
 
 
+def download_file_bytes(email: str, file_id: str) -> tuple[bytes, dict]:
+    """Download a Drive file into memory; return (content, metadata).
+
+    Used by the DB-backed scan store — nothing touches local disk, so this
+    works identically on a laptop and on serverless hosting.
+    """
+    meta = file_metadata(email, file_id)
+    data = _drive(email).files().get_media(fileId=file_id).execute()
+    return data, meta
+
+
 def download_file(email: str, file_id: str, dest_dir: Path) -> tuple[Path, dict]:
     """Download a Drive file to dest_dir keyed by file_id; return (path, metadata).
 

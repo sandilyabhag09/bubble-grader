@@ -461,6 +461,130 @@ def get_submission(submission_id: int) -> dict | None:
     return d
 
 
+### Scan files (student answer-sheet blobs) ---------------------------------
+#
+# Scans live in the database — not on local disk — so a serverless deploy
+# (Vercel) and a laptop install see the same files, and a fresh clone can
+# always build feedback overlays. They're transient: deleted once a grading
+# cycle finishes (feedback sent) and purged after PURGE_DAYS regardless,
+# because the originals stay in the students' Drive and can be refetched.
+
+SCAN_PURGE_DAYS = 14
+
+
+def store_scan_file(
+    course_id: str,
+    coursework_id: str,
+    student_id: str,
+    file_id: str,
+    *,
+    name: str | None = None,
+    mime: str | None = None,
+    content: bytes | None = None,
+    error: str | None = None,
+    student_name: str | None = None,
+    student_email: str | None = None,
+    classroom_submission_id: str | None = None,
+    state: str | None = None,
+) -> None:
+    """Upsert one downloaded (or failed) scan for a student."""
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO scan_files (
+                course_id, coursework_id, student_id, file_id,
+                name, mime, content, error,
+                student_name, student_email, classroom_submission_id, state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (course_id, coursework_id, student_id, file_id) DO UPDATE SET
+                name = excluded.name,
+                mime = excluded.mime,
+                content = excluded.content,
+                error = excluded.error,
+                student_name = excluded.student_name,
+                student_email = excluded.student_email,
+                classroom_submission_id = excluded.classroom_submission_id,
+                state = excluded.state,
+                fetched_at = datetime('now')
+            """,
+            (course_id, coursework_id, student_id, file_id,
+             name, mime, content, error,
+             student_name, student_email, classroom_submission_id, state),
+        )
+
+
+def get_student_scan(course_id: str, coursework_id: str, student_id: str) -> dict | None:
+    """Newest successfully-downloaded scan for one student, content included."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM scan_files
+            WHERE course_id = ? AND coursework_id = ? AND student_id = ?
+              AND content IS NOT NULL
+            ORDER BY fetched_at DESC LIMIT 1
+            """,
+            (course_id, coursework_id, student_id),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["content"] = bytes(d["content"])  # psycopg returns memoryview
+    return d
+
+
+def list_scan_students(course_id: str, coursework_id: str) -> dict[str, dict]:
+    """Manifest-shaped view of stored scans: {student_id: {…, files: […]}}.
+
+    Content bytes are NOT included — this is for iterating/grading decisions.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT course_id, coursework_id, student_id, file_id, name, mime, error,
+                   student_name, student_email, classroom_submission_id, state,
+                   (content IS NOT NULL) AS has_content
+            FROM scan_files
+            WHERE course_id = ? AND coursework_id = ?
+            ORDER BY student_id, fetched_at DESC
+            """,
+            (course_id, coursework_id),
+        ).fetchall()
+    students: dict[str, dict] = {}
+    for r in rows:
+        d = dict(r)
+        s = students.setdefault(d["student_id"], {
+            "email": d.get("student_email"),
+            "name": d.get("student_name"),
+            "submission_id": d.get("classroom_submission_id"),
+            "state": d.get("state"),
+            "files": [],
+        })
+        f = {"file_id": d["file_id"], "name": d.get("name"), "mime": d.get("mime")}
+        if not d.get("has_content"):
+            f["error"] = d.get("error") or "download failed"
+        s["files"].append(f)
+    return students
+
+
+def delete_assignment_scans(course_id: str, coursework_id: str) -> int:
+    """Drop every stored scan for one assignment (end of a grading cycle)."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM scan_files WHERE course_id = ? AND coursework_id = ?",
+            (course_id, coursework_id),
+        )
+        return cur.rowcount
+
+
+def purge_old_scans(days: int = SCAN_PURGE_DAYS) -> int:
+    """Safety net: drop scans older than `days`, whatever their assignment."""
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM scan_files WHERE fetched_at < ?", (cutoff,))
+        return cur.rowcount
+
+
 ### OAuth-flow state (existing) --------------------------------------------
 
 def save_state(state: str, code_verifier: str) -> None:

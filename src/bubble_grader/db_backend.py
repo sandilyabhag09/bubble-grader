@@ -244,6 +244,25 @@ DDL_SQLITE = [
         PRIMARY KEY (course_id, coursework_id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS scan_files (
+        course_id TEXT NOT NULL,
+        coursework_id TEXT NOT NULL,
+        student_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        name TEXT,
+        mime TEXT,
+        content BLOB,
+        error TEXT,
+        student_name TEXT,
+        student_email TEXT,
+        classroom_submission_id TEXT,
+        state TEXT,
+        fetched_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (course_id, coursework_id, student_id, file_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_scan_files_cw ON scan_files(course_id, coursework_id)",
     # In-place migration for installs created before scope_json existed.
     # SQLite silently no-ops if the column already exists IFF we use a
     # try/except — bare ALTER fails, so we run it via a guard in init_db.
@@ -306,6 +325,25 @@ DDL_POSTGRES = [
         PRIMARY KEY (course_id, coursework_id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS scan_files (
+        course_id TEXT NOT NULL,
+        coursework_id TEXT NOT NULL,
+        student_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        name TEXT,
+        mime TEXT,
+        content BYTEA,
+        error TEXT,
+        student_name TEXT,
+        student_email TEXT,
+        classroom_submission_id TEXT,
+        state TEXT,
+        fetched_at TIMESTAMPTZ DEFAULT now(),
+        PRIMARY KEY (course_id, coursework_id, student_id, file_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_scan_files_cw ON scan_files(course_id, coursework_id)",
 ]
 
 
