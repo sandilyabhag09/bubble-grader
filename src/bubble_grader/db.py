@@ -19,6 +19,7 @@ def init_db() -> None:
         for stmt in ddl_statements():
             conn.execute(stmt)
         _migrate_add_scope_column(conn)
+        _migrate_add_not_scored_column(conn)
 
 
 def _migrate_add_scope_column(conn) -> None:
@@ -39,6 +40,21 @@ def _migrate_add_scope_column(conn) -> None:
     cols = {row["name"] if hasattr(row, "keys") else row[1] for row in cur.fetchall()}
     if "scope_json" not in cols:
         conn.execute("ALTER TABLE app_assignments ADD COLUMN scope_json TEXT")
+
+
+def _migrate_add_not_scored_column(conn) -> None:
+    """Add tests.not_scored_json if missing. Holds the per-section list of
+    field-test question numbers that ACT doesn't score — the answer key still
+    carries their answers (so we can show students every wrong question), but
+    grading excludes them. Safe to run on every startup.
+    """
+    if conn.is_postgres:
+        conn.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS not_scored_json TEXT")
+        return
+    cur = conn.execute("PRAGMA table_info(tests)")
+    cols = {row["name"] if hasattr(row, "keys") else row[1] for row in cur.fetchall()}
+    if "not_scored_json" not in cols:
+        conn.execute("ALTER TABLE tests ADD COLUMN not_scored_json TEXT")
 
 
 def _fernet() -> Fernet:
@@ -164,6 +180,10 @@ def get_test(test_id: str) -> dict | None:
     d = dict(row)
     d["answer_key"] = json.loads(d.pop("answer_key_json")) if d["answer_key_json"] else None
     d["scaler"] = json.loads(d.pop("scaler_json")) if d["scaler_json"] else None
+    ftj = d.pop("not_scored_json", None)
+    # Answers for field-test ("not scored") questions, kept OUT of answer_key so
+    # no grading path can ever count them. Shape: {section: {q_in_test: option}}.
+    d["field_test_answers"] = json.loads(ftj) if ftj else None
     return d
 
 
@@ -176,6 +196,22 @@ def set_test_answer_key(test_id: str, answer_key: dict) -> None:
             WHERE id = ?
             """,
             (json.dumps(answer_key), test_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"No test with id={test_id!r}. Use `test add` first.")
+
+
+def set_test_field_test_answers(test_id: str, field_test_answers: dict | None) -> None:
+    """Store answers for field-test (not-scored) questions, kept out of the
+    grading answer key so they can never affect a score.
+
+    ``field_test_answers`` is ``{section: {q_in_test: option}}`` or None to clear.
+    """
+    payload = json.dumps(field_test_answers) if field_test_answers else None
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE tests SET not_scored_json = ?, updated_at = datetime('now') WHERE id = ?",
+            (payload, test_id),
         )
         if cur.rowcount == 0:
             raise ValueError(f"No test with id={test_id!r}. Use `test add` first.")

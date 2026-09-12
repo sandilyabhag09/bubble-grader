@@ -85,6 +85,8 @@ def cmd_load_shared_tests() -> None:
             dbmod.set_test_answer_key(test_id, payload["answers"])
         if payload.get("scaler"):
             dbmod.set_test_scaler(test_id, payload["scaler"])
+        if payload.get("field_test_answers"):
+            dbmod.set_test_field_test_answers(test_id, payload["field_test_answers"])
         click.echo(f"  ✓ {test_id}: loaded")
         n_loaded += 1
     click.echo(

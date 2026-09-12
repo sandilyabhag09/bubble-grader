@@ -94,10 +94,39 @@ def _inner_key(answer_key: dict) -> dict[str, dict]:
     return answer_key
 
 
+def merge_field_test(answer_key: dict | None, field_test_answers: dict | None) -> dict:
+    """Overlay field-test answers onto the scored answer key.
+
+    Used ONLY for display (email + overlay + detail table): grading always runs
+    on the scored-only ``answer_key`` so field-test questions can never move a
+    score, but for display we want their answers too so students see every wrong
+    question. Returns a new dict; inputs are not mutated.
+    """
+    out: dict = {sec: dict(qs) for sec, qs in (answer_key or {}).items()}
+    for sec, qs in (field_test_answers or {}).items():
+        out.setdefault(sec, {}).update(qs)
+    return out
+
+
+def _not_scored_set(not_scored: dict | None) -> set[tuple[str, int]]:
+    """Normalize ``{section: [q_in_test, ...]}`` to a set of (section, int)."""
+    out: set[tuple[str, int]] = set()
+    if not not_scored:
+        return out
+    for section, qs in not_scored.items():
+        for q in qs or []:
+            try:
+                out.add((section, int(q)))
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 def grade_answers(
     answers: dict[int, str],
     template: dict,
     answer_key: dict,
+    not_scored: dict | None = None,
 ) -> dict[str, dict]:
     """Per-section breakdown: counts, raw score, per-question detail.
 
@@ -105,8 +134,14 @@ def grade_answers(
     `template` provides q → (section, q_in_test) mapping via its `bubbles`.
     `answer_key` is either the wrapped form from `load_answer_key` or the inner
     {section: {q_in_test: option}} dict (e.g. as stored in the DB).
+    `not_scored` is ``{section: [q_in_test, ...]}`` of field-test questions ACT
+    doesn't count. Their answers are still in the key (so we can grade them for
+    display), but they're excluded from the counts and raw score — every detail
+    carries a ``scored`` flag so the email/overlay can show them as wrong while
+    the scaled score reflects only the scored questions.
     """
     key = _inner_key(answer_key)
+    ns = _not_scored_set(not_scored)
     q_meta: dict[int, tuple[str, int]] = {}
     for b in template.get("bubbles", []):
         if "section" in b and "q_in_test" in b:
@@ -127,6 +162,7 @@ def grade_answers(
             # correct answer to compare against, so skip entirely rather
             # than miscount blanks or mark stray marks as wrong.
             continue
+        is_scored = (section, q_in_test) not in ns
         sec = sections.setdefault(
             section,
             {"n_correct": 0, "n_incorrect": 0, "n_blank": 0, "n_multi": 0, "details": []},
@@ -135,16 +171,18 @@ def grade_answers(
         given_norm = given.upper() if isinstance(given, str) else given
         if given_norm == "BLANK":
             status = "blank"
-            sec["n_blank"] += 1
         elif given_norm == "MULTI":
             status = "multi"
-            sec["n_multi"] += 1
         elif correct is not None and given_norm == correct:
             status = "correct"
-            sec["n_correct"] += 1
         else:
             status = "incorrect"
-            sec["n_incorrect"] += 1
+
+        # Field-test questions are graded (so we know they're wrong/right) but
+        # never counted — only scored questions move the counters/raw score.
+        if is_scored:
+            sec[{"blank": "n_blank", "multi": "n_multi",
+                 "correct": "n_correct", "incorrect": "n_incorrect"}[status]] += 1
 
         sec["details"].append(
             {
@@ -153,6 +191,7 @@ def grade_answers(
                 "given": given_norm,
                 "correct": correct,
                 "status": status,
+                "scored": is_scored,
             }
         )
 
@@ -186,7 +225,10 @@ def partial_summary(report: dict, scope: dict) -> dict:
     sec_info = (report.get("sections") or {}).get(section) or {}
     details = sec_info.get("details") or []
     in_range = [d for d in details if qs <= d.get("q_in_test", 0) <= qe]
-    raw = sum(1 for d in in_range if d.get("status") == "correct")
+    raw = sum(
+        1 for d in in_range
+        if d.get("status") == "correct" and d.get("scored", True)
+    )
     total = max(0, qe - qs + 1)
     pct = round((raw / total) * 100, 1) if total else 0.0
     return {"raw": raw, "total": total, "percent": pct}
@@ -197,9 +239,10 @@ def full_grade(
     template: dict,
     answer_key: dict,
     scaler: dict[str, dict[int, int]] | None = None,
+    not_scored: dict | None = None,
 ) -> dict:
     """End-to-end report: per-section raw + scaled + composite."""
-    sections = grade_answers(answers, template, answer_key)
+    sections = grade_answers(answers, template, answer_key, not_scored=not_scored)
 
     scaled_per_section: dict[str, int] = {}
     if scaler is not None:
