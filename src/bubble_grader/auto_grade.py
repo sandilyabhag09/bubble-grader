@@ -82,6 +82,44 @@ def _newly_turned_in(email: str, course_id: str, coursework_id: str) -> list[str
 
 def _grade_once() -> None:
     """One poll cycle across every teacher's app-owned assignments."""
+    run_auto_grade_once()
+
+
+def run_auto_grade_once(
+    max_students: int | None = None,
+    time_budget: float | None = None,
+    max_assignment_age_days: int = 45,
+) -> dict:
+    """Grade everything newly turned in, across all teachers. Returns a summary.
+
+    Called two ways: by the local background thread, and by the tokened
+    ``/cron/auto-grade`` endpoint that an external pinger hits on serverless
+    hosting (where background threads don't exist). ``max_students`` and
+    ``time_budget`` (seconds) bound one run so a serverless request never
+    outstays its welcome — anything left over is picked up by the next ping.
+
+    Only assignments created in the last ``max_assignment_age_days`` are
+    checked, so the per-run Classroom API cost doesn't grow forever; old
+    assignments can always be graded with the button.
+    """
+    started = time.monotonic()
+    summary: dict = {"assignments_checked": 0, "students_graded": 0,
+                     "students_failed": 0, "details": [], "truncated": False}
+
+    def _out_of_budget() -> bool:
+        if time_budget is not None and time.monotonic() - started > time_budget:
+            return True
+        if max_students is not None and (
+            summary["students_graded"] + summary["students_failed"] >= max_students
+        ):
+            return True
+        return False
+
+    cutoff = None
+    if max_assignment_age_days:
+        from datetime import datetime, timedelta, timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_assignment_age_days)
+
     for email in dbmod.list_teachers():
         try:
             courses = list_courses(email)
@@ -96,17 +134,45 @@ def _grade_once() -> None:
                 cw_id = asg.get("coursework_id")
                 if not test_id or not cw_id:
                     continue
+                created = _as_dt(asg.get("created_at"))
+                if cutoff is not None and created is not None and created < cutoff:
+                    continue
+                if _out_of_budget():
+                    summary["truncated"] = True
+                    return summary
                 try:
+                    summary["assignments_checked"] += 1
                     students = _newly_turned_in(email, course_id, cw_id)
                     if not students:
                         continue
+                    if max_students is not None:
+                        room = max_students - (summary["students_graded"] + summary["students_failed"])
+                        students = students[:max(0, room)]
+                    if not students:
+                        summary["truncated"] = True
+                        return summary
                     template_path, _ref = template_for_test(test_id)
-                    grade_classroom_assignment(
+                    result = grade_classroom_assignment(
                         email, course_id, cw_id, test_id, template_path,
                         only_students=students,
                     )
-                except Exception:  # noqa: BLE001 — never let one assignment break the loop
+                    for r in result.get("results", []):
+                        ok = r.get("status") == "graded"
+                        summary["students_graded" if ok else "students_failed"] += 1
+                        summary["details"].append({
+                            "coursework_id": cw_id,
+                            "student": r.get("name") or r.get("student_id"),
+                            "status": r.get("status"),
+                            "composite": r.get("composite"),
+                            "error": r.get("error"),
+                        })
+                except Exception as e:  # noqa: BLE001 — never let one assignment break the loop
+                    summary["details"].append({
+                        "coursework_id": cw_id, "status": "assignment_error",
+                        "error": f"{type(e).__name__}: {e}",
+                    })
                     continue
+    return summary
 
 
 def start_auto_grade_poller() -> threading.Thread:
@@ -115,7 +181,7 @@ def start_auto_grade_poller() -> threading.Thread:
         time.sleep(10)  # let the server finish coming up first
         while True:
             try:
-                _grade_once()
+                run_auto_grade_once()
             except Exception:  # noqa: BLE001 — never let the poller crash the app
                 pass
             time.sleep(AUTO_GRADE_POLL_SECONDS)

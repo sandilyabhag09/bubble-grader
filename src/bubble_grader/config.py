@@ -38,6 +38,12 @@ AUTO_GRADE_ON_TURNIN = os.environ.get("AUTO_GRADE_ON_TURNIN", "").strip().lower(
 )
 AUTO_GRADE_POLL_SECONDS = int(os.environ.get("AUTO_GRADE_POLL_SECONDS") or "60")
 
+# Serverless auto-grading: when set, GET /cron/auto-grade?token=<this> runs one
+# bounded grade-everything-new pass. Point an external pinger (UptimeRobot) at
+# it every few minutes and turn-ins grade themselves; it doubles as the
+# keep-warm ping. Unset = endpoint disabled.
+AUTO_GRADE_TOKEN = (os.environ.get("AUTO_GRADE_TOKEN") or "").strip()
+
 # Order matters less than completeness. Strings must match exactly what's
 # registered in the Google Auth Platform "Data Access" page.
 SCOPES = [

@@ -22,7 +22,7 @@ from .classroom import (
     list_roster,
     list_submissions,
 )
-from .config import AUTO_GRADE_ON_TURNIN, FERNET_KEY, IS_VERCEL, SERVER_PORT
+from .config import AUTO_GRADE_ON_TURNIN, AUTO_GRADE_TOKEN, FERNET_KEY, IS_VERCEL, SERVER_PORT
 from .google_auth import (
     authorization_url,
     credentials_to_dict,
@@ -800,6 +800,24 @@ def assignment_feedback_complete(request: Request, course_id: str, cw_id: str):
 def healthz():
     """Ultra-cheap liveness endpoint for keep-warm pingers. No auth, no DB."""
     return {"ok": True}
+
+
+@app.get("/cron/auto-grade")
+def cron_auto_grade(token: str = ""):
+    """Grade everything newly turned in — trigger for an external pinger.
+
+    Serverless hosts can't run background threads, so an external pinger
+    (e.g. UptimeRobot every 5 minutes) hits this instead; it also keeps the
+    function warm. Bounded so one run always fits the request time limit;
+    leftovers are picked up by the next ping. Requires AUTO_GRADE_TOKEN.
+    """
+    if not AUTO_GRADE_TOKEN or token != AUTO_GRADE_TOKEN:
+        raise HTTPException(404, "Not found.")
+    from .auto_grade import run_auto_grade_once
+    summary = run_auto_grade_once(max_students=10, time_budget=210)
+    if summary["students_graded"] or summary["students_failed"]:
+        print(f"[auto-grade] {summary}")
+    return summary
 
 
 @app.post("/courses/{course_id}/coursework/{cw_id}/release")
