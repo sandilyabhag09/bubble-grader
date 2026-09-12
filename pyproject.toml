@@ -27,6 +27,7 @@ dependencies = [
     # psycopg's `[binary]` extra ships a precompiled libpq so the teacher
     # doesn't need PostgreSQL client libs installed. Only used when
     # DATABASE_URL is set; SQLite is still the local-only fallback.
+    "psycopg-pool>=3.2",
     "psycopg[binary]>=3.2.0",
     "pypdf>=6.12.2",
     "pypdfium2>=5.9.0",

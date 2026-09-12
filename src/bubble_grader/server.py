@@ -167,6 +167,8 @@ def oauth_callback(request: Request):
                "Ask the admin to add you to the teacher list.")
         return RedirectResponse("/", status_code=303)
     dbmod.store_credentials(email, credentials_to_dict(creds))
+    from .google_api import forget_credentials
+    forget_credentials(email)
     request.session["email"] = email
     _flash(request, "ok", f"Signed in as {email}.")
     return RedirectResponse("/dashboard", status_code=303)
@@ -565,11 +567,25 @@ def assignment_view(request: Request, course_id: str, cw_id: str, test: str | No
     email = _require(request)
     if isinstance(email, RedirectResponse):
         return email
-    courses = list_courses(email)
+    # Four independent Google calls — run them concurrently so the page pays
+    # one round trip (~0.4 s) instead of four in a row.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_courses = pool.submit(list_courses, email)
+        f_coursework = pool.submit(list_coursework, email, course_id)
+        f_cls_subs = pool.submit(list_submissions, email, course_id, cw_id)
+        f_roster = pool.submit(list_roster, email, course_id)
+        courses = f_courses.result()
+        coursework = f_coursework.result()
+        try:
+            cls_subs = f_cls_subs.result()
+        except Exception:  # noqa: BLE001 — state column is best-effort
+            cls_subs = []
+        roster = f_roster.result()
+
     course = next((c for c in courses if c["id"] == course_id), None)
     if course is None:
         raise HTTPException(404, "Course not found.")
-    coursework = list_coursework(email, course_id)
     cw = next((x for x in coursework if x["id"] == cw_id), None)
     if cw is None:
         raise HTTPException(404, "Assignment not found.")
@@ -580,19 +596,15 @@ def assignment_view(request: Request, course_id: str, cw_id: str, test: str | No
     assigned_test_id = test or (owned.get("test_id") if owned else None)
 
     # Classroom-side submission state, keyed by student userId.
-    cls_state: dict[str, str] = {}
-    try:
-        for s in list_submissions(email, course_id, cw_id):
-            cls_state[s["userId"]] = s.get("state", "?")
-    except Exception:  # noqa: BLE001
-        pass
+    cls_state: dict[str, str] = {
+        s["userId"]: s.get("state", "?") for s in cls_subs if s.get("userId")
+    }
 
     # Roster + locally graded submissions.
     # `list_submissions` returns rows ORDER BY created_at DESC, so the
     # newest row for each student appears FIRST. We want to keep that
     # first occurrence; a dict comprehension would silently overwrite
     # with the oldest. `setdefault` is the right tool here.
-    roster = list_roster(email, course_id)
     graded: dict[str, dict] = {}
     for r in dbmod.list_submissions(
         course_id=course_id, coursework_id=cw_id, include_score=True,

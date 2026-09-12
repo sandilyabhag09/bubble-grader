@@ -1,6 +1,46 @@
-"""Classroom API reads: courses, coursework (assignments), roster, submissions."""
+"""Classroom API reads: courses, coursework (assignments), roster, submissions.
+
+Read results are cached in-process for a short while (per teacher and id):
+courses, assignments and rosters change rarely, but every page used to re-ask
+Google for them — ~400 ms a call, several calls a page. Writes that change a
+list (create/delete coursework, grade pushes) invalidate the affected entry,
+so a teacher never sees their own edit lag behind.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
 
 from .google_api import service_for
+
+# Seconds each list stays fresh. Submissions turn over fastest.
+TTL_COURSES = 60
+TTL_COURSEWORK = 45
+TTL_ROSTER = 120
+TTL_SUBMISSIONS = 20
+
+_cache: dict[tuple, tuple[float, list]] = {}
+_lock = threading.Lock()
+
+
+def _cached(key: tuple, ttl: float, compute):
+    now = time.monotonic()
+    with _lock:
+        hit = _cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    value = compute()
+    with _lock:
+        _cache[key] = (now + ttl, value)
+    return value
+
+
+def invalidate(*prefix) -> None:
+    """Drop cached entries whose key starts with ``prefix`` (empty = everything)."""
+    with _lock:
+        for k in [k for k in _cache if k[: len(prefix)] == prefix]:
+            _cache.pop(k, None)
 
 
 def _paginate(request_fn, items_key: str) -> list[dict]:
@@ -15,45 +55,55 @@ def _paginate(request_fn, items_key: str) -> list[dict]:
 
 
 def list_courses(email: str) -> list[dict]:
-    svc = service_for(email, "classroom", "v1")
-    return _paginate(
-        lambda tok: svc.courses().list(courseStates=["ACTIVE"], pageToken=tok),
-        "courses",
-    )
+    def compute():
+        svc = service_for(email, "classroom", "v1")
+        return _paginate(
+            lambda tok: svc.courses().list(courseStates=["ACTIVE"], pageToken=tok),
+            "courses",
+        )
+    return _cached(("courses", email), TTL_COURSES, compute)
 
 
 def list_coursework(email: str, course_id: str) -> list[dict]:
     """List assignments / questions in a course (all states the teacher can see)."""
-    svc = service_for(email, "classroom", "v1")
-    return _paginate(
-        lambda tok: svc.courses().courseWork().list(
-            courseId=course_id, pageToken=tok
-        ),
-        "courseWork",
-    )
+    def compute():
+        svc = service_for(email, "classroom", "v1")
+        return _paginate(
+            lambda tok: svc.courses().courseWork().list(
+                courseId=course_id, pageToken=tok
+            ),
+            "courseWork",
+        )
+    return _cached(("coursework", email, course_id), TTL_COURSEWORK, compute)
 
 
 def list_roster(email: str, course_id: str) -> list[dict]:
     """List students in a course. Each item has userId + profile (name, email)."""
-    svc = service_for(email, "classroom", "v1")
-    return _paginate(
-        lambda tok: svc.courses().students().list(
-            courseId=course_id, pageToken=tok
-        ),
-        "students",
-    )
+    def compute():
+        svc = service_for(email, "classroom", "v1")
+        return _paginate(
+            lambda tok: svc.courses().students().list(
+                courseId=course_id, pageToken=tok
+            ),
+            "students",
+        )
+    return _cached(("roster", email, course_id), TTL_ROSTER, compute)
 
 
 def list_submissions(
     email: str, course_id: str, coursework_id: str
 ) -> list[dict]:
     """List student submissions for one assignment (all states)."""
-    svc = service_for(email, "classroom", "v1")
-    return _paginate(
-        lambda tok: svc.courses().courseWork().studentSubmissions().list(
-            courseId=course_id, courseWorkId=coursework_id, pageToken=tok
-        ),
-        "studentSubmissions",
+    def compute():
+        svc = service_for(email, "classroom", "v1")
+        return _paginate(
+            lambda tok: svc.courses().courseWork().studentSubmissions().list(
+                courseId=course_id, courseWorkId=coursework_id, pageToken=tok
+            ),
+            "studentSubmissions",
+        )
+    return _cached(
+        ("submissions", email, course_id, coursework_id), TTL_SUBMISSIONS, compute
     )
 
 
@@ -70,28 +120,18 @@ def get_coursework(email: str, course_id: str, coursework_id: str) -> dict:
 
 def delete_coursework(email: str, course_id: str, coursework_id: str) -> dict:
     """Delete a Classroom assignment. Only works for coursework our OAuth
-    project created — Google rejects deletes on UI-created coursework with 403.
-    """
-    svc = service_for(email, "classroom", "v1")
-    return (
-        svc.courses()
-        .courseWork()
-        .delete(courseId=course_id, id=coursework_id)
-        .execute()
-    )
-
-
-def delete_coursework(email: str, course_id: str, coursework_id: str) -> dict:
-    """Delete a Classroom assignment. Only works for coursework our OAuth
     project created — Google rejects deletes of UI-created coursework with 403.
     """
     svc = service_for(email, "classroom", "v1")
-    return (
+    result = (
         svc.courses()
         .courseWork()
         .delete(courseId=course_id, id=coursework_id)
         .execute()
     )
+    invalidate("coursework", email, course_id)
+    invalidate("submissions", email, course_id, coursework_id)
+    return result
 
 
 def create_coursework(
@@ -119,12 +159,14 @@ def create_coursework(
     if description:
         body["description"] = description
     svc = service_for(email, "classroom", "v1")
-    return (
+    result = (
         svc.courses()
         .courseWork()
         .create(courseId=course_id, body=body)
         .execute()
     )
+    invalidate("coursework", email, course_id)
+    return result
 
 
 def patch_grade(
@@ -148,7 +190,7 @@ def patch_grade(
     if not draft_only:
         body["assignedGrade"] = grade
         mask = "assignedGrade,draftGrade"
-    return (
+    result = (
         svc.courses()
         .courseWork()
         .studentSubmissions()
@@ -161,6 +203,8 @@ def patch_grade(
         )
         .execute()
     )
+    invalidate("submissions", email, course_id, coursework_id)
+    return result
 
 
 def return_submission(
@@ -169,7 +213,7 @@ def return_submission(
     """Return a graded submission so the student can see the score."""
     svc = service_for(email, "classroom", "v1")
     # `return` is a Python keyword; the API client wraps it as `return_`.
-    return (
+    result = (
         svc.courses()
         .courseWork()
         .studentSubmissions()
@@ -181,3 +225,5 @@ def return_submission(
         )
         .execute()
     )
+    invalidate("submissions", email, course_id, coursework_id)
+    return result

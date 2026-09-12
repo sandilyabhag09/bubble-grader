@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -45,6 +46,32 @@ def _pg():
     import psycopg
     from psycopg.rows import dict_row
     return psycopg, dict_row
+
+
+# One process-wide pool: opening a fresh TLS connection to Postgres costs
+# ~100-300 ms, and pages used to do it for every single query. On a warm
+# serverless instance the pool also carries connections across requests.
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool():
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _psycopg, dict_row = _pg()
+                from psycopg_pool import ConnectionPool
+                _pool = ConnectionPool(
+                    _DATABASE_URL,
+                    min_size=0,
+                    max_size=8,
+                    max_idle=60,          # drop connections idle > 60 s (Neon-friendly)
+                    kwargs={"row_factory": dict_row},
+                    check=ConnectionPool.check_connection,  # never hand out a dead conn
+                    open=True,
+                )
+    return _pool
 
 
 class _Cursor:
@@ -165,13 +192,10 @@ class Connection:
 @contextmanager
 def get_conn() -> Iterator[Connection]:
     if is_postgres():
-        psycopg, dict_row = _pg()
-        raw = psycopg.connect(_DATABASE_URL, row_factory=dict_row)
-        try:
+        # pool.connection() commits on clean exit and rolls back on exception.
+        with _get_pool().connection() as raw:
             yield Connection(raw, is_pg=True)
             raw.commit()
-        finally:
-            raw.close()
     else:
         raw = sqlite3.connect(DB_PATH)
         raw.row_factory = sqlite3.Row
