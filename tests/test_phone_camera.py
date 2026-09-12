@@ -92,6 +92,9 @@ def test_second_photo_rescues_a_blurry_first(db, tmp_path, stem):
     assert r["file"] == "good.png"
     assert r["composite"] == 36  # perfect synthetic sheet
     assert db.list_grade_errors("c", "cw") == {}
+    # A perfectly-filled sheet must produce an EMPTY review queue.
+    stored = db.get_submission(r["submission_id"])
+    assert stored["score"].get("review") == []
 
 
 def test_all_files_unreadable_reports_each_attempt(db):

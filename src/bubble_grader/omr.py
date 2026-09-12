@@ -293,6 +293,7 @@ def read_sheet_fm(
     dpi: int = 200,
     min_fill: float = MIN_FILL,
     ambiguous_delta: float = AMBIGUOUS_DELTA,
+    return_warped: bool = False,
 ) -> dict:
     """Marker-free reader. Computes the homography by ORB-matching the photo
     against a reference rasterization of the unmodified sheet.
@@ -325,9 +326,15 @@ def read_sheet_fm(
 
     answers, fills, binary = _sample_warped(warped, template, dpi, min_fill, ambiguous_delta)
     _maybe_write_debug(debug_dir, warped, binary)
-    return {
+    result = {
         "answers": answers,
         "fills": fills,
         "mode": "feature_match",
         "match_info": info,
     }
+    if return_warped:
+        # For review-queue crops: callers slice question rows out of the
+        # canonical-frame image. Never persisted whole.
+        result["warped"] = warped
+        result["warped_dpi"] = dpi
+    return result

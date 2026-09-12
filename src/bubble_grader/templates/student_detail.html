@@ -58,6 +58,7 @@
           <tr>
             <th>Section</th>
             <th>Q in test</th>
+            <th>What the reader saw</th>
             <th>System read</th>
             <th>Correct</th>
             <th>New answer</th>
@@ -75,6 +76,13 @@
               </select>
             </td>
             <td><input name="q_in_test" type="number" value="{{ r.q_in_test }}" min="1" required style="width: 80px;"></td>
+            <td style="max-width: 340px;">
+              {% if r.crop_b64 %}
+                <img src="data:image/jpeg;base64,{{ r.crop_b64 }}" alt="row crop"
+                     style="display:block; max-height: 46px; max-width: 330px; border-radius: 4px; background: #fff;">
+              {% endif %}
+              {% if r.reason %}<div class="muted" style="font-size: 12px;">{{ r.reason }}</div>{% endif %}
+            </td>
             <td class="muted">{{ r.given }}</td>
             <td class="muted">{{ r.correct or "?" }}</td>
             <td><input name="answer" type="text" maxlength="1" placeholder="A-K" style="width: 60px; text-transform: uppercase;"></td>
@@ -82,7 +90,7 @@
           </tr>
           {% endfor %}
           {% if not flagged %}
-          <tr id="empty-hint"><td colspan="6" class="muted">No flagged questions on this submission. Use "+ Add row" to override any question.</td></tr>
+          <tr id="empty-hint"><td colspan="7" class="muted">Nothing flagged for review on this submission — every bubble read cleanly. Use "+ Add row" to override any question.</td></tr>
           {% endif %}
         </tbody>
       </table>
@@ -144,6 +152,7 @@
     tr.innerHTML = `
       <td><select name="section" required>${sectionOptions}</select></td>
       <td><input name="q_in_test" type="number" min="1" required style="width: 80px;"></td>
+      <td class="muted">—</td>
       <td class="muted">—</td>
       <td class="muted">—</td>
       <td><input name="answer" type="text" maxlength="1" placeholder="A-K" required style="width: 60px; text-transform: uppercase;"></td>

@@ -209,6 +209,91 @@ def _resolve_reference(template_path: Path) -> Path:
     return template_path.parent / ref_name
 
 
+# Review-queue tuning: which reader decisions deserve a human glance.
+REVIEW_MAX_ITEMS = 12
+REVIEW_BLANK_ATTENTION = 0.12   # a "blank" with this much fill might be a faint mark
+REVIEW_RUNNERUP_ATTENTION = 0.20  # a chosen answer with a runner-up this dark is worth a look
+
+
+def _review_suspects(read_result: dict, template: dict, max_items: int = REVIEW_MAX_ITEMS) -> list[dict]:
+    """Borderline reader decisions, each with a cropped image of the row.
+
+    The reader already resolves these with thresholds; this surfaces the calls
+    that were CLOSE so the teacher can adjudicate from a picture instead of
+    hunting down the paper. Returned entries go into score["review"].
+    """
+    from .omr import SOLID_FILL
+
+    fills = read_result.get("fills") or {}
+    answers = read_result.get("answers") or {}
+    warped = read_result.get("warped")
+    dpi = read_result.get("warped_dpi", 200)
+
+    meta: dict[int, tuple[str, int]] = {}
+    bubbles_by_q: dict[int, list[dict]] = {}
+    for b in template.get("bubbles", []):
+        meta[b["q"]] = (b.get("section"), b.get("q_in_test"))
+        bubbles_by_q.setdefault(b["q"], []).append(b)
+
+    suspects: list[dict] = []
+    for q in sorted(fills):
+        ranked = sorted(fills[q], key=lambda o: -o["fill"])
+        top = ranked[0]["fill"] if ranked else 0.0
+        second = ranked[1]["fill"] if len(ranked) > 1 else 0.0
+        given = answers.get(q)
+
+        if given == "BLANK" and top >= REVIEW_BLANK_ATTENTION:
+            reason = f"read as BLANK, but one bubble shows fill {top:.2f} — faint mark?"
+            severity = 0
+        elif given == "MULTI":
+            reason = f"read as MULTI (two marks at {top:.2f} / {second:.2f})"
+            severity = 0
+        elif isinstance(given, str) and given not in ("BLANK", "MULTI") and (
+            top < SOLID_FILL or second >= REVIEW_RUNNERUP_ATTENTION
+        ):
+            reason = f"kept {given}, but it was close (top {top:.2f}, runner-up {second:.2f})"
+            severity = 1
+        else:
+            continue
+
+        section, q_in_test = meta.get(q, (None, None))
+        suspects.append({
+            "q": q, "section": section, "q_in_test": q_in_test,
+            "given": given, "reason": reason,
+            "top_fill": round(top, 3), "second_fill": round(second, 3),
+            "_severity": severity,
+        })
+
+    # Blank/multi first (they cost points silently), then borderline keeps.
+    suspects.sort(key=lambda d: (d["_severity"], d["section"] or "", d["q_in_test"] or 0))
+    suspects = suspects[:max_items]
+
+    if warped is not None:
+        import base64
+        import cv2
+        px_per_mm = dpi / 25.4
+        h, w = warped.shape[:2]
+        for sus in suspects:
+            row = bubbles_by_q.get(sus["q"]) or []
+            if not row:
+                continue
+            xs = [b["center_mm"][0] * px_per_mm for b in row]
+            ys = [b["center_mm"][1] * px_per_mm for b in row]
+            r = max(b["radius_mm"] * px_per_mm for b in row)
+            x0 = max(0, int(min(xs) - 4 * r)); x1 = min(w, int(max(xs) + 4 * r))
+            y0 = max(0, int(min(ys) - 2.2 * r)); y1 = min(h, int(max(ys) + 2.2 * r))
+            if y1 <= y0 or x1 <= x0:
+                continue  # row falls outside the warped frame — no crop
+            crop = warped[y0:y1, x0:x1]
+            ok, jpg = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            if ok:
+                sus["crop_b64"] = base64.b64encode(jpg.tobytes()).decode()
+
+    for sus in suspects:
+        sus.pop("_severity", None)
+    return suspects
+
+
 def grade_classroom_assignment(
     email: str,
     course_id: str,
@@ -308,7 +393,9 @@ def grade_classroom_assignment(
         for scan in scans:
             tmp_path = scan_to_tempfile(scan)
             try:
-                read_result = read_sheet_fm(tmp_path, template_path, reference_path)
+                read_result = read_sheet_fm(
+                    tmp_path, template_path, reference_path, return_warped=True
+                )
                 used_scan = scan
                 break
             except Exception as e:  # noqa: BLE001 — try the next file
@@ -336,6 +423,11 @@ def grade_classroom_assignment(
             report = full_grade(answers, template, test["answer_key"], test["scaler"])
             if scope and scope.get("type") == "partial":
                 report["partial"] = partial_summary(report, scope)
+            # Borderline reader calls, with row crops, for human review.
+            try:
+                report["review"] = _review_suspects(read_result, template)
+            except Exception:  # noqa: BLE001 — review is best-effort, never blocks grading
+                report["review"] = []
             sub_id = dbmod.add_submission(
                 test_id=test_id,
                 answers=answers,

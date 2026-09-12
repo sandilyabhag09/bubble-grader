@@ -1045,20 +1045,43 @@ def student_detail_view(request: Request, course_id: str, cw_id: str, student_id
             "skipped": skipped_correct + skipped_wrong,
         })
 
-    # Pre-fill: every BLANK/MULTI flagged question.
-    flagged: list[dict] = []
-    for section_key, info in sections_info.items():
+    # Pre-fill the review/override table. New grades carry score["review"]:
+    # every borderline reader call (faint blanks, multis, shaky singles) with
+    # a cropped image of the row so the teacher adjudicates from a picture.
+    # Older grades fall back to the plain BLANK/MULTI list.
+    detail_by_q: dict[int, dict] = {}
+    for info in sections_info.values():
         for d in info.get("details", []):
-            if d.get("status") in ("blank", "multi"):
-                flagged.append({
-                    "section": section_key,
-                    "q_in_test": d.get("q_in_test"),
-                    "q": d.get("q"),
-                    "given": d.get("given"),
-                    "correct": d.get("correct"),
-                })
-    flagged.sort(key=lambda r: (list(_SECTION_LABELS).index(r["section"]) if r["section"] in _SECTION_LABELS else 999,
-                                r["q_in_test"] or 0))
+            if d.get("q") is not None:
+                detail_by_q[d["q"]] = d
+
+    flagged: list[dict] = []
+    review = score.get("review")
+    if review:
+        for r0 in review:
+            d = detail_by_q.get(r0.get("q"), {})
+            flagged.append({
+                "section": r0.get("section"),
+                "q_in_test": r0.get("q_in_test"),
+                "q": r0.get("q"),
+                "given": r0.get("given"),
+                "correct": d.get("correct"),
+                "reason": r0.get("reason"),
+                "crop_b64": r0.get("crop_b64"),
+            })
+    else:
+        for section_key, info in sections_info.items():
+            for d in info.get("details", []):
+                if d.get("status") in ("blank", "multi"):
+                    flagged.append({
+                        "section": section_key,
+                        "q_in_test": d.get("q_in_test"),
+                        "q": d.get("q"),
+                        "given": d.get("given"),
+                        "correct": d.get("correct"),
+                    })
+        flagged.sort(key=lambda r: (list(_SECTION_LABELS).index(r["section"]) if r["section"] in _SECTION_LABELS else 999,
+                                    r["q_in_test"] or 0))
 
     return _render(
         request, "student_detail.html",
