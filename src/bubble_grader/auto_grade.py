@@ -18,7 +18,7 @@ import time
 from datetime import datetime
 
 from . import db as dbmod
-from .classroom import list_courses, list_submissions
+from .classroom import get_coursework, list_courses, list_submissions
 from .config import AUTO_GRADE_POLL_SECONDS
 from .submissions import grade_classroom_assignment, template_for_test
 
@@ -167,12 +167,45 @@ def run_auto_grade_once(
                             "error": r.get("error"),
                         })
                 except Exception as e:  # noqa: BLE001 — never let one assignment break the loop
-                    summary["details"].append({
-                        "coursework_id": cw_id, "status": "assignment_error",
-                        "error": f"{type(e).__name__}: {e}",
-                    })
+                    liveness = _assignment_liveness(email, course_id, cw_id)
+                    if liveness == "deleted":
+                        # Gone from Classroom for good — stop tracking it, so it
+                        # never shows up or gets checked again. Grade history for
+                        # students stays untouched.
+                        dbmod.delete_app_assignment(
+                            course_id, cw_id, cascade_submissions=False
+                        )
+                        summary["details"].append({
+                            "coursework_id": cw_id,
+                            "status": "pruned_deleted_assignment",
+                        })
+                    elif liveness == "unpublished":
+                        pass  # draft/scheduled — will grade once it goes live
+                    else:
+                        summary["details"].append({
+                            "coursework_id": cw_id, "status": "assignment_error",
+                            "error": f"{type(e).__name__}: {e}",
+                        })
                     continue
     return summary
+
+
+def _assignment_liveness(email: str, course_id: str, cw_id: str) -> str:
+    """Why can't this assignment's submissions be listed?
+
+    'deleted'      -> coursework no longer exists in Classroom (permanent)
+    'unpublished'  -> it exists but is DRAFT/SCHEDULED; fine once published
+    'unknown'      -> anything else (transient error, permissions, ...)
+    """
+    from googleapiclient.errors import HttpError
+    try:
+        cw = get_coursework(email, course_id, cw_id)
+    except HttpError as e:
+        status = getattr(getattr(e, "resp", None), "status", None)
+        return "deleted" if status == 404 else "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    return "unpublished" if cw.get("state") != "PUBLISHED" else "unknown"
 
 
 def start_auto_grade_poller() -> threading.Thread:
