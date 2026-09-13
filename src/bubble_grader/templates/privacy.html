@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="crumbs"><a href="/">Home</a> / Privacy policy</div>
+
+  <h1>Privacy policy</h1>
+  <p class="muted">Bubble Grader · last updated {{ updated }}</p>
+
+  <div class="card">
+    <h3>What this app is</h3>
+    <p>Bubble Grader is a grading tool used by teachers at a tutoring program. A teacher signs in with
+      their Google account; the app reads the bubble-sheet scans that students turn in through Google
+      Classroom, scores them against an answer key, and records the grades.</p>
+  </div>
+
+  <div class="card">
+    <h3>Google data the app accesses</h3>
+    <ul>
+      <li><strong>Google Classroom</strong> — the teacher's courses, class rosters (student names and
+        email addresses), assignments, and student submissions. The app writes grades back to assignments
+        it created and returns them to students.</li>
+      <li><strong>Google Drive</strong> — read-only access to the scan files students attach to their
+        Classroom submissions. The app does not read any other Drive files.</li>
+      <li><strong>Gmail</strong> — sends score-report emails from the teacher's own address, only when
+        the teacher clicks "Send feedback emails".</li>
+      <li><strong>Account email</strong> — to identify the signed-in teacher and check they're on the
+        program's teacher list.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>What is stored, and for how long</h3>
+    <ul>
+      <li>Teachers' Google sign-in tokens, encrypted at rest, so the app can grade without the teacher
+        being present. Deleted when the teacher revokes access.</li>
+      <li>Grades and per-question results for each submission, kept so teachers and students can look
+        back at past tests.</li>
+      <li>Student scan files, kept only while a test is being graded and deleted afterwards
+        (automatically after 14 days at the latest).</li>
+    </ul>
+    <p>Data lives in a private database used only by this app. It is never sold, shared with
+      advertisers, or used for anything other than grading and reporting scores to the teacher and
+      the student.</p>
+  </div>
+
+  <div class="card">
+    <h3>Google API Services User Data Policy</h3>
+    <p>Bubble Grader's use of information received from Google APIs adheres to the
+      <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google
+      API Services User Data Policy</a>, including the Limited Use requirements.</p>
+  </div>
+
+  <div class="card">
+    <h3>Your choices &amp; contact</h3>
+    <p>A teacher can revoke the app's access at any time from their
+      <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google account permissions</a>;
+      the stored token stops working immediately. To have grades or other stored data deleted, or with
+      any questions, contact <a href="mailto:{{ contact }}">{{ contact }}</a>.</p>
+  </div>
+{% endblock %}

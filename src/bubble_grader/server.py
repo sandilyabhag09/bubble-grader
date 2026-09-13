@@ -197,6 +197,13 @@ def index(request: Request):
     return _render(request, "index.html")
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy(request: Request):
+    # Public: Google requires a privacy-policy URL to publish the OAuth app.
+    return _render(request, "privacy.html",
+                   updated="September 13, 2026", contact="sbhagavatula09@gmail.com")
+
+
 # ----- dashboard ------------------------------------------------------------
 
 @app.get("/dashboard", response_class=HTMLResponse)

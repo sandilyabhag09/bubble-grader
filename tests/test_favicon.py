@@ -15,3 +15,11 @@ def test_favicon_linked_and_served():
     assert 'href="/static/favicon.svg"' in head and 'rel="apple-touch-icon"' in head
     paths = {getattr(r, "path", None) for r in server.app.routes}
     assert "/favicon.ico" in paths and "/static" in paths
+
+
+def test_privacy_page_is_public():
+    from starlette.testclient import TestClient
+    with TestClient(server.app) as client:
+        r = client.get("/privacy")
+    assert r.status_code == 200
+    assert "Limited Use" in r.text and "Google Classroom" in r.text
