@@ -58,6 +58,15 @@ AUTO_GRADE_POLL_SECONDS = int(os.environ.get("AUTO_GRADE_POLL_SECONDS") or "60")
 # keep-warm ping. Unset = endpoint disabled.
 AUTO_GRADE_TOKEN = (os.environ.get("AUTO_GRADE_TOKEN") or "").strip()
 
+# Real-time grading via Classroom push notifications (see push_notify.py).
+# PUBSUB_TOPIC is the full topic name Classroom publishes turn-in events to,
+# e.g. "projects/bubble-grader/topics/classroom-notifications"; unset = the
+# app never registers for notifications and grading relies on the cron ping.
+# CLASSROOM_PUSH_TOKEN guards the webhook URL Pub/Sub pushes to; it falls back
+# to AUTO_GRADE_TOKEN so one secret is enough.
+PUBSUB_TOPIC = (os.environ.get("PUBSUB_TOPIC") or "").strip()
+CLASSROOM_PUSH_TOKEN = (os.environ.get("CLASSROOM_PUSH_TOKEN") or "").strip() or AUTO_GRADE_TOKEN
+
 # Order matters less than completeness. Strings must match exactly what's
 # registered in the Google Auth Platform "Data Access" page.
 SCOPES = [
@@ -68,5 +77,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/classroom.coursework.students",
     "https://www.googleapis.com/auth/classroom.profile.emails",
     "https://www.googleapis.com/auth/drive.readonly",
+    # Lets the app ask Classroom to notify it the moment work is turned in.
+    "https://www.googleapis.com/auth/classroom.push-notifications",
     "https://www.googleapis.com/auth/gmail.send",
 ]

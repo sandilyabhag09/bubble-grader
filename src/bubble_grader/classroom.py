@@ -227,3 +227,40 @@ def return_submission(
     )
     invalidate("submissions", email, course_id, coursework_id)
     return result
+
+
+def get_submission(
+    email: str, course_id: str, coursework_id: str, submission_id: str
+) -> dict:
+    """One student submission by its id (uncached — used to check a fresh
+    turn-in the moment Classroom notifies us about it)."""
+    svc = service_for(email, "classroom", "v1")
+    return (
+        svc.courses()
+        .courseWork()
+        .studentSubmissions()
+        .get(courseId=course_id, courseWorkId=coursework_id, id=submission_id)
+        .execute()
+    )
+
+
+def create_registration(email: str, course_id: str, topic: str) -> dict:
+    """Ask Classroom to publish this course's coursework/submission changes to
+    a Pub/Sub topic. Returns {registrationId, expiryTime, ...}. Registrations
+    expire after about a week, so push_notify renews them from the cron ping.
+    Needs the classroom.push-notifications scope and a topic that grants
+    classroom-notifications@system.gserviceaccount.com the Publisher role."""
+    svc = service_for(email, "classroom", "v1")
+    body = {
+        "feed": {
+            "feedType": "COURSE_WORK_CHANGES",
+            "courseWorkChangesInfo": {"courseId": course_id},
+        },
+        "cloudPubsubTopic": {"topicName": topic},
+    }
+    return svc.registrations().create(body=body).execute()
+
+
+def delete_registration(email: str, registration_id: str) -> None:
+    svc = service_for(email, "classroom", "v1")
+    svc.registrations().delete(registrationId=registration_id).execute()

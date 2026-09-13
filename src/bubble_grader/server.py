@@ -27,6 +27,7 @@ from .config import (
     ALLOWED_TEACHERS,
     AUTO_GRADE_ON_TURNIN,
     AUTO_GRADE_TOKEN,
+    CLASSROOM_PUSH_TOKEN,
     FERNET_KEY,
     IS_VERCEL,
     SERVER_PORT,
@@ -562,6 +563,13 @@ def new_assignment_submit(
         created_by=email,
         scope=scope,
     )
+    # First app assignment in this course → start listening for turn-ins now
+    # rather than waiting for the next cron ping. Best-effort.
+    try:
+        from .push_notify import ensure_registrations
+        ensure_registrations(course_ids=[course_id], time_budget=15)
+    except Exception:  # noqa: BLE001
+        pass
     _flash(request, "ok", f"Created assignment '{title}'.")
     return RedirectResponse(
         f"/courses/{course_id}/coursework/{cw['id']}", status_code=303
@@ -888,10 +896,41 @@ def cron_auto_grade(token: str = ""):
     if not AUTO_GRADE_TOKEN or token != AUTO_GRADE_TOKEN:
         raise HTTPException(404, "Not found.")
     from .auto_grade import run_auto_grade_once
-    summary = run_auto_grade_once(max_students=10, time_budget=210)
-    if summary["students_graded"] or summary["students_failed"]:
+    from .push_notify import ensure_registrations
+    # Keep Classroom's push registrations alive first (cheap, ~1 call per
+    # course only when one is near expiry), then sweep for anything missed.
+    try:
+        registrations = ensure_registrations(time_budget=30)
+    except Exception as e:  # noqa: BLE001 — never block grading on this
+        registrations = {"error": f"{type(e).__name__}: {e}"}
+    summary = run_auto_grade_once(max_students=10, time_budget=180)
+    summary["registrations"] = registrations
+    if summary["students_graded"] or summary["students_failed"] or registrations.get("registered"):
         print(f"[auto-grade] {summary}")
     return summary
+
+
+@app.post("/hooks/classroom")
+async def classroom_push_hook(request: Request, token: str = ""):
+    """Pub/Sub push endpoint: Classroom just changed a submission. If it's a
+    fresh turn-in on one of our assignments, grade it now (and the grade goes
+    straight back to the student). Always 200 once authenticated — Pub/Sub
+    would otherwise redeliver for days; the cron pass is the retry path."""
+    if not CLASSROOM_PUSH_TOKEN or token != CLASSROOM_PUSH_TOKEN:
+        raise HTTPException(404, "Not found.")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    from .push_notify import handle_notification
+    try:
+        result = handle_notification(body)
+    except Exception as e:  # noqa: BLE001
+        import traceback; traceback.print_exc()
+        result = {"status": "error", "error": f"{type(e).__name__}: {e}"}
+    if result.get("status") != "ignored":
+        print(f"[classroom-push] {result}")
+    return result
 
 
 @app.post("/courses/{course_id}/coursework/{cw_id}/release")

@@ -349,6 +349,63 @@ def list_app_assignments(course_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def list_app_assignment_courses() -> list[dict]:
+    """Distinct courses that have app-owned assignments, with the teacher who
+    created the most recent one (the natural owner for push registrations)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT course_id, created_by, created_at FROM app_assignments "
+            "ORDER BY created_at DESC"
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        r = dict(r)
+        out.setdefault(r["course_id"], {"course_id": r["course_id"], "created_by": r.get("created_by")})
+    return list(out.values())
+
+
+### Classroom push-notification registrations -------------------------------
+
+def upsert_push_registration(
+    course_id: str, *, registration_id: str, teacher_email: str, topic: str,
+    expiry_time: str | None,
+) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO push_registrations
+                (course_id, registration_id, teacher_email, topic, expiry_time)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(course_id) DO UPDATE SET
+                registration_id = excluded.registration_id,
+                teacher_email   = excluded.teacher_email,
+                topic           = excluded.topic,
+                expiry_time     = excluded.expiry_time,
+                updated_at      = datetime('now')
+            """,
+            (course_id, registration_id, teacher_email, topic, expiry_time),
+        )
+
+
+def get_push_registration(course_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM push_registrations WHERE course_id = ?", (course_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_push_registrations() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM push_registrations ORDER BY course_id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_push_registration(course_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM push_registrations WHERE course_id = ?", (course_id,))
+
+
 def delete_test(test_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM tests WHERE id = ?", (test_id,))

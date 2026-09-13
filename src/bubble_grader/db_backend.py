@@ -282,6 +282,16 @@ DDL_SQLITE = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS push_registrations (
+        course_id TEXT PRIMARY KEY,
+        registration_id TEXT NOT NULL,
+        teacher_email TEXT NOT NULL,
+        topic TEXT NOT NULL,
+        expiry_time TEXT,
+        updated_at TEXT DEFAULT (datetime('now'))
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS scan_files (
         course_id TEXT NOT NULL,
         coursework_id TEXT NOT NULL,
@@ -371,6 +381,16 @@ DDL_POSTGRES = [
         error TEXT,
         updated_at TIMESTAMPTZ DEFAULT now(),
         PRIMARY KEY (course_id, coursework_id, student_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS push_registrations (
+        course_id TEXT PRIMARY KEY,
+        registration_id TEXT NOT NULL,
+        teacher_email TEXT NOT NULL,
+        topic TEXT NOT NULL,
+        expiry_time TEXT,
+        updated_at TIMESTAMPTZ DEFAULT now()
     )
     """,
     """
