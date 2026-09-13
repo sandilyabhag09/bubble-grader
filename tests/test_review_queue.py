@@ -4,7 +4,7 @@ import base64
 
 import numpy as np
 
-from bubble_grader.submissions import REVIEW_MAX_ITEMS, _review_suspects
+from bubble_grader.submissions import REVIEW_MAX_CROPS, _review_suspects
 
 
 def _template(n_questions=6, options=("A", "B", "C", "D")):
@@ -71,10 +71,15 @@ def test_crops_are_valid_jpegs():
     assert len(raw) < 60_000
 
 
-def test_suspects_are_capped():
-    rr = _read_result({q: ("MULTI", 0.5, 0.45) for q in range(1, 30)})
-    out = _review_suspects(rr, _template(n_questions=30))
-    assert len(out) == REVIEW_MAX_ITEMS
+def test_every_blank_row_is_listed_only_crops_are_capped():
+    """34 blanks must show 34 rows — a teacher noticed 20. Images are the
+    heavy part, so only those are capped."""
+    n = REVIEW_MAX_CROPS + 15
+    rr = _read_result({q: ("BLANK", 0.02, 0.01) for q in range(1, n + 1)})
+    out = _review_suspects(rr, _template(n_questions=n))
+    assert len(out) == n
+    assert sum(1 for s in out if "crop_b64" in s) == REVIEW_MAX_CROPS
+    assert all("crop_b64" not in s for s in out[REVIEW_MAX_CROPS:])
 
 
 def test_missing_warped_image_still_flags_without_crops():

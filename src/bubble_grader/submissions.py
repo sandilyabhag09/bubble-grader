@@ -278,10 +278,13 @@ def _resolve_reference(template_path: Path) -> Path:
 # Review queue: only the rows that cost the student a point (BLANK / MULTI).
 # Borderline-but-committed answers are deliberately NOT surfaced — teachers
 # found "kept B, but it was close" more confusing than helpful.
-REVIEW_MAX_ITEMS = 20
+# EVERY blank/multi row is listed (a teacher asked why 34 blanks showed 20
+# rows); only the row images are capped, since they're what makes the stored
+# grade heavy. Rows past the cap still appear, just without a picture.
+REVIEW_MAX_CROPS = 60
 
 
-def _review_suspects(read_result: dict, template: dict, max_items: int = REVIEW_MAX_ITEMS) -> list[dict]:
+def _review_suspects(read_result: dict, template: dict, max_crops: int = REVIEW_MAX_CROPS) -> list[dict]:
     """BLANK and MULTI rows, each with a cropped image of the row.
 
     These are the calls that cost points, so the teacher confirms each from a
@@ -319,14 +322,13 @@ def _review_suspects(read_result: dict, template: dict, max_items: int = REVIEW_
 
     # Multis first (an intended answer exists), then blanks.
     suspects.sort(key=lambda d: (d["_severity"], d["section"] or "", d["q_in_test"] or 0))
-    suspects = suspects[:max_items]
 
     if warped is not None:
         import base64
         import cv2
         px_per_mm = dpi / 25.4
         h, w = warped.shape[:2]
-        for sus in suspects:
+        for sus in suspects[:max_crops]:
             row = bubbles_by_q.get(sus["q"]) or []
             if not row:
                 continue
