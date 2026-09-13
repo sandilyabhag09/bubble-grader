@@ -1,15 +1,16 @@
 """Return graded work inside Google Classroom — no email.
 
-For one student: post their results text + the marked-up sheet as a private
-announcement (visible to that student and teachers), then set the final grade
-and return the submission so the score shows up for them. If the post fails
-(e.g. missing permission), nothing is returned — the teacher fixes and retries
-with no half-done state.
+For one student: post their results text + the marked-up sheet as a Classwork
+material only they (and teachers) can see, filed under a "Graded results"
+topic, then set the final grade and return the submission so the score shows
+up for them. Classwork rather than the Stream so a class of 20 doesn't get 20
+posts per test. If the post fails (e.g. missing permission), nothing is
+returned — the teacher fixes and retries with no half-done state.
 """
 
 from __future__ import annotations
 
-from .classroom import create_student_announcement
+from .classroom import create_student_material, ensure_topic
 from .drive import upload_pdf
 from .feedback import student_feedback
 from .submissions import release_grades
@@ -37,6 +38,8 @@ def return_to_student(
 
     name = fb["student_name"]
     first = name.split()[0] if name and name != "there" else "there"
+    label = fb.get("test_name") or "ACT"
+    title = f"{label} — your results"
     text = f"Hi {first},\n\n{fb['report']}"
     if fb["pdf"]:
         text += (
@@ -50,13 +53,14 @@ def return_to_student(
 
     file_id = None
     if fb["pdf"]:
-        label = fb.get("test_name") or "ACT"
         uploaded = upload_pdf(teacher_email, f"{_safe_filename(f'{name} - {label}')} - marked up.pdf", fb["pdf"])
         file_id = uploaded["id"]
 
     # Post first: if this fails (permissions), we haven't returned anything yet.
-    ann = create_student_announcement(
-        teacher_email, course_id, text, student_ids=[student_id], drive_file_id=file_id
+    post = create_student_material(
+        teacher_email, course_id, title, text,
+        student_ids=[student_id], drive_file_id=file_id,
+        topic_id=ensure_topic(teacher_email, course_id),
     )
 
     rel = release_grades(
@@ -69,7 +73,7 @@ def return_to_student(
         "student_id": student_id,
         "name": name,
         "status": "returned" if ok else "grade_failed",
-        "announcement_id": ann.get("id"),
+        "post_id": post.get("id"),
         "attached_overlay": bool(file_id),
         "overlay_error": fb["overlay_error"],
         "grade_status": r.get("status"),

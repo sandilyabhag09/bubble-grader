@@ -860,7 +860,7 @@ def assignment_return_student(
     student_id: str = Form(...), teacher_name: str = Form(""),
 ):
     """Return one student's work in Classroom: final grade + returned submission
-    + a private post carrying their marked-up sheet. No email."""
+    + a private Classwork material carrying their marked-up sheet. No email."""
     email = _require_json(request)
     if isinstance(email, JSONResponse):
         return email

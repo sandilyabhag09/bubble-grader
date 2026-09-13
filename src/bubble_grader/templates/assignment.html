@@ -119,7 +119,8 @@
 
         <div style="margin-top: 16px;" class="muted">
           Grades are pushed to Classroom as <strong>drafts</strong> automatically when graded (teachers only).
-          Tick students, then <strong>Return</strong> to make grades official and post each student their marked-up sheet.
+          Tick students, then <strong>Return</strong> to make grades official and post each student their marked-up sheet
+          (a private item under <em>Classwork &rarr; Graded results</em> — nothing goes in the Stream).
         </div>
 
         <div class="row" style="margin-top: 12px; gap: 16px;">
@@ -268,7 +269,7 @@
     const ids = Array.from(document.querySelectorAll("input[name=student_ids]:checked:not([disabled])"))
       .map(c => c.value);
     if (!ids.length) { alert("No students selected."); return; }
-    if (!confirm(`Return ${ids.length} student(s) in Classroom? Each gets their official grade plus a private post with their marked-up sheet.`)) return;
+    if (!confirm(`Return ${ids.length} student(s) in Classroom? Each gets their official grade plus a private Classwork item (under "Graded results") with their marked-up sheet.`)) return;
     const teacherEl = document.querySelector("input[name=teacher_name]");
     const teacher = teacherEl ? teacherEl.value : "";
     setBusy(true);

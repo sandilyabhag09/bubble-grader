@@ -26,8 +26,11 @@ def _fake_read(*a, **k):
 
 
 def test_new_scopes_present():
-    assert "https://www.googleapis.com/auth/classroom.announcements" in SCOPES
+    assert "https://www.googleapis.com/auth/classroom.courseworkmaterials" in SCOPES
+    assert "https://www.googleapis.com/auth/classroom.topics" in SCOPES
     assert "https://www.googleapis.com/auth/drive.file" in SCOPES
+    # Announcements = Stream posts; one per student would bury the class feed.
+    assert "https://www.googleapis.com/auth/classroom.announcements" not in SCOPES
 
 
 def test_grading_pushes_draft_grade_for_app_owned_assignment(db, monkeypatch):
@@ -65,12 +68,14 @@ def test_return_posts_sheet_then_returns_grade(monkeypatch):
         "status": "ok", "student_name": "Kid Person", "student_email": "k@x",
         "test_name": "Seeing Streams", "report": "Composite: 30/36", "pdf": b"%PDF", "overlay_error": None})
     monkeypatch.setattr(cr, "upload_pdf", lambda email, name, data: (order.append("upload"), {"id": "FILE1"})[1])
-    def fake_ann(email, course_id, text, *, student_ids, drive_file_id):
-        order.append("announce")
-        assert student_ids == ["s1"] and drive_file_id == "FILE1"
+    monkeypatch.setattr(cr, "ensure_topic", lambda email, course_id: "TOPIC1")
+    def fake_post(email, course_id, title, text, *, student_ids, drive_file_id, topic_id):
+        order.append("post")
+        assert student_ids == ["s1"] and drive_file_id == "FILE1" and topic_id == "TOPIC1"
+        assert title == "Seeing Streams — your results"
         assert "Hi Kid," in text and "Composite: 30/36" in text and "— Ms. T" in text
-        return {"id": "ANN1"}
-    monkeypatch.setattr(cr, "create_student_announcement", fake_ann)
+        return {"id": "MAT1"}
+    monkeypatch.setattr(cr, "create_student_material", fake_post)
     def fake_release(email, course_id, cw_id, **kw):
         order.append("release")
         assert kw == {"return_to_student": True, "only_students": ["s1"]}
@@ -78,8 +83,8 @@ def test_return_posts_sheet_then_returns_grade(monkeypatch):
     monkeypatch.setattr(cr, "release_grades", fake_release)
 
     r = cr.return_to_student("t@x", "c", "cw", "s1", test_name="Seeing Streams", teacher_name="Ms. T")
-    assert order == ["upload", "announce", "release"]
-    assert r["status"] == "returned" and r["attached_overlay"] and r["announcement_id"] == "ANN1"
+    assert order == ["upload", "post", "release"]
+    assert r["status"] == "returned" and r["attached_overlay"] and r["post_id"] == "MAT1"
 
 
 def test_failed_post_returns_nothing(monkeypatch):
@@ -89,14 +94,24 @@ def test_failed_post_returns_nothing(monkeypatch):
         "status": "ok", "student_name": "Kid", "student_email": None, "test_name": "T",
         "report": "r", "pdf": None, "overlay_error": "no scan"})
     def boom(*a, **k): raise RuntimeError("403 insufficient scopes")
-    monkeypatch.setattr(cr, "create_student_announcement", boom)
+    monkeypatch.setattr(cr, "ensure_topic", lambda email, course_id: None)
+    monkeypatch.setattr(cr, "create_student_material", boom)
     monkeypatch.setattr(cr, "release_grades",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not release")))
     try:
         cr.return_to_student("t@x", "c", "cw", "s1")
-        assert False, "expected the announcement error to propagate"
+        assert False, "expected the post error to propagate"
     except RuntimeError as e:
         assert "insufficient scopes" in str(e)
+
+
+def test_topic_failure_does_not_block_return(monkeypatch):
+    """No topics permission → post lands untopiced, the return still happens."""
+    import bubble_grader.classroom as classroom
+    classroom.invalidate()
+    def no_service(*a, **k): raise RuntimeError("403 topics scope missing")
+    monkeypatch.setattr(classroom, "service_for", no_service)
+    assert classroom.ensure_topic("t@x", "c") is None
 
 
 def test_finished_first_ranking():
