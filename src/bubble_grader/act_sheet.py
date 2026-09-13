@@ -47,10 +47,23 @@ NEW_FORMAT_SECTIONS = [
     {"name": "Test 4", "n_questions": 40, "n_options": 4, "rows_per_col": [7, 7, 7, 7, 7, 5]},
 ]
 
+# "Scored-only" new-format sheet (40/41/27/34): the 2025 ACT with its
+# non-scored experimental questions removed, as used with renumbered "My
+# Answer Key" booklets. Enhanced-ACT Math has 4 answer choices, so every
+# section is 4 options wide. Last columns are ragged (Math's lone Q41,
+# Reading's 3-row and Science's 2-row tails).
+SCORED_FORMAT_SECTIONS = [
+    {"name": "Test 1", "n_questions": 40, "n_options": 4, "rows_per_col": [10, 10, 10, 10]},
+    {"name": "Test 2", "n_questions": 41, "n_options": 4, "rows_per_col": [10, 10, 10, 10, 1]},
+    {"name": "Test 3", "n_questions": 27, "n_options": 4, "rows_per_col": [8, 8, 8, 3]},
+    {"name": "Test 4", "n_questions": 34, "n_options": 4, "rows_per_col": [8, 8, 8, 8, 2]},
+]
+
 # Named registry so callers can ask for a layout by string.
 LAYOUTS = {
     "legacy": ACT_SECTIONS,
     "new":    NEW_FORMAT_SECTIONS,
+    "scored": SCORED_FORMAT_SECTIONS,
 }
 
 
@@ -325,7 +338,7 @@ def label_bubbles(
     # New-format rows are also packed tighter vertically — about 4-5mm
     # apart vs ~6mm on the legacy sheet. Halve the Y-tolerance for "new"
     # so two adjacent rows don't merge into one.
-    row_tol_mm = 1.0 if cfg_list is NEW_FORMAT_SECTIONS else 2.0
+    row_tol_mm = 2.0 if cfg_list is ACT_SECTIONS else 1.0
     sections = _split_into_sections(
         detected,
         dpi=dpi,

@@ -71,6 +71,8 @@ def _get_pool():
                     check=ConnectionPool.check_connection,  # never hand out a dead conn
                     open=True,
                 )
+                import atexit
+                atexit.register(_pool.close)  # quiet shutdown (no finalizer noise)
     return _pool
 
 

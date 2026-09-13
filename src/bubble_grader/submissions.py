@@ -178,23 +178,89 @@ def scan_to_tempfile(scan: dict) -> str:
 # (serverless functions don't run from the repo root).
 DEFAULT_SHEETS_DIR = DATA_DIR / "sheets"
 
+# Every bubble sheet the reader knows, with its per-section question counts.
+# A test picks the sheet whose counts equal its total questions per section
+# (scored + field-test); a scan that doesn't match the expected sheet is
+# retried against the others (students do grab the wrong printout).
+SHEET_LAYOUTS: dict[str, dict[str, int]] = {
+    "act_sheet":        {"Test 1": 75, "Test 2": 60, "Test 3": 40, "Test 4": 40},  # legacy
+    "act_sheet_new":    {"Test 1": 50, "Test 2": 45, "Test 3": 36, "Test 4": 40},  # 2025 format
+    "act_sheet_scored": {"Test 1": 40, "Test 2": 41, "Test 3": 27, "Test 4": 34},  # 2025, no field-test rows
+}
+
+# Feature-match quality floor. Real matches measured 49-1100+ inliers at a
+# 0.31-0.60 inlier ratio; a scan of the WRONG sheet that scraped past the
+# reader's minimum measured 27 @ 0.10 and 38 @ 0.25 — and graded as noise.
+MIN_MATCH_INLIERS = 40
+MIN_MATCH_RATIO = 0.28
+
+
+def sheet_paths(stem: str) -> tuple[Path, Path]:
+    return (DEFAULT_SHEETS_DIR / f"{stem}.template.json",
+            DEFAULT_SHEETS_DIR / f"{stem}.reference.png")
+
+
+def sheet_stem_from_path(template_path: Path | str) -> str:
+    return Path(template_path).name.split(".template")[0]
+
+
+def template_stem_for_test(test_id: str) -> str:
+    """Which sheet a test's students should be bubbling on."""
+    t = dbmod.get_test(test_id)
+    key = (t or {}).get("answer_key") or {}
+    if not key:
+        return "act_sheet"
+    ft = (t or {}).get("field_test_answers") or {}
+    totals = {sec: len(key.get(sec) or {}) + len(ft.get(sec) or {}) for sec in SHEET_LAYOUTS["act_sheet"]}
+    for stem, counts in SHEET_LAYOUTS.items():
+        if all(totals.get(sec, 0) == n for sec, n in counts.items()):
+            return stem
+    # Unusual key (partial sections etc.): fall back to the format heuristic.
+    return "act_sheet_new" if len(key.get("Test 1") or {}) <= 50 else "act_sheet"
+
 
 def template_for_test(test_id: str) -> tuple[Path, Path]:
-    """Pick the right OMR template + reference image for a test.
+    """(template_path, reference_path) for the sheet this test is bubbled on."""
+    return sheet_paths(template_stem_for_test(test_id))
 
-    Inspects the test's English answer-key length to detect new-format
-    (50/45/36/40) vs legacy (75/60/40/40). New-format tests use
-    ``act_sheet_new.*``; everything else uses the original ``act_sheet.*``.
-    Returns (template_path, reference_path) ready to hand to read_sheet_fm.
-    """
-    t = dbmod.get_test(test_id)
-    is_new = False
-    if t and t.get("answer_key"):
-        eng = (t["answer_key"] or {}).get("Test 1") or {}
-        is_new = len(eng) <= 50
-    stem = "act_sheet_new" if is_new else "act_sheet"
-    base = DEFAULT_SHEETS_DIR
-    return (base / f"{stem}.template.json", base / f"{stem}.reference.png")
+
+def _match_ok(read_result: dict) -> bool:
+    info = read_result.get("match_info") or {}
+    return (info.get("n_inliers", 0) >= MIN_MATCH_INLIERS
+            and info.get("inlier_ratio", 0.0) >= MIN_MATCH_RATIO)
+
+
+def _read_with_best_sheet(scan_path: str, preferred_stem: str) -> tuple[dict, str]:
+    """Read a scan against the expected sheet; if that match is weak, try every
+    other known sheet and keep the best. Refuses (raises) rather than grade a
+    scan that matched nothing well — a bogus score is worse than no score."""
+    from .omr import read_sheet_fm
+
+    order = [preferred_stem] + [st for st in SHEET_LAYOUTS if st != preferred_stem]
+    best: tuple[dict, str, int] | None = None
+    errors: list[str] = []
+    for stem in order:
+        tpl, ref = sheet_paths(stem)
+        if not tpl.exists():
+            continue
+        try:
+            rr = read_sheet_fm(scan_path, tpl, ref, return_warped=True)
+        except Exception as e:  # noqa: BLE001 — try the next sheet
+            errors.append(f"{stem}: {type(e).__name__}: {e}")
+            continue
+        if stem == preferred_stem and _match_ok(rr):
+            return rr, stem  # fast path: expected sheet, confident match
+        n = (rr.get("match_info") or {}).get("n_inliers", 0)
+        if best is None or n > best[2]:
+            best = (rr, stem, n)
+    if best is not None and _match_ok(best[0]):
+        return best[0], best[1]
+    detail = (f"best was {best[2]} inliers against {best[1]}" if best
+              else "; ".join(errors) or "no sheets available")
+    raise ValueError(
+        f"sheet didn't match any known layout ({detail}) — wrong printout or unreadable "
+        "photo? Not graded, to avoid a bogus score."
+    )
 
 
 def _resolve_reference(template_path: Path) -> Path:
@@ -300,8 +366,13 @@ def grade_classroom_assignment(
     so the run as a whole completes for the rest of the class.
     """
     template_path = Path(template_path)
-    reference_path = _resolve_reference(template_path)
-    template = json.loads(template_path.read_text())
+    preferred_stem = sheet_stem_from_path(template_path)
+    _template_cache: dict[str, dict] = {}
+
+    def _template_for(stem: str) -> dict:
+        if stem not in _template_cache:
+            _template_cache[stem] = json.loads(sheet_paths(stem)[0].read_text())
+        return _template_cache[stem]
 
     test = dbmod.get_test(test_id)
     if test is None:
@@ -316,8 +387,6 @@ def grade_classroom_assignment(
     # raw/total instead of composite.
     app_asg = dbmod.get_app_assignment(course_id, coursework_id)
     scope = (app_asg or {}).get("scope")
-
-    from .omr import read_sheet_fm  # lazy: keep server cold starts light
 
     if refetch:
         manifest = fetch_assignment(
@@ -376,13 +445,11 @@ def grade_classroom_assignment(
 
         # Try every attached file until one reads — a blurry first photo
         # shouldn't sink a submission whose second shot is fine.
-        read_result, used_scan, read_errors = None, None, []
+        read_result, used_scan, used_stem, read_errors = None, None, None, []
         for scan in scans:
             tmp_path = scan_to_tempfile(scan)
             try:
-                read_result = read_sheet_fm(
-                    tmp_path, template_path, reference_path, return_warped=True
-                )
+                read_result, used_stem = _read_with_best_sheet(tmp_path, preferred_stem)
                 used_scan = scan
                 break
             except Exception as e:  # noqa: BLE001 — try the next file
@@ -404,10 +471,12 @@ def grade_classroom_assignment(
             continue
 
         try:
+            template = _template_for(used_stem)
             answers = {int(k): v for k, v in read_result["answers"].items()}
             # Grade against the scored-only answer key — field-test answers live
             # separately and can never affect the score.
             report = full_grade(answers, template, test["answer_key"], test["scaler"])
+            report["sheet_template"] = used_stem  # so overlays use the same geometry
             if scope and scope.get("type") == "partial":
                 report["partial"] = partial_summary(report, scope)
             # Borderline reader calls, with row crops, for human review.

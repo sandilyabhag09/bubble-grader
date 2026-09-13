@@ -211,8 +211,13 @@ def build_overlay_for_student(
 
     app_asg = dbmod.get_app_assignment(course_id, coursework_id)
     test_id = (app_asg or {}).get("test_id") or full.get("test_id")
-    from .submissions import template_for_test
-    if test_id:
+    from .submissions import sheet_paths, template_for_test
+    # Prefer the sheet this scan actually matched at grading time — a student
+    # may have bubbled a different printout than the test's default sheet.
+    stem = (full.get("score") or {}).get("sheet_template")
+    if stem and sheet_paths(stem)[0].exists():
+        template_path, reference_path = sheet_paths(stem)
+    elif test_id:
         template_path, reference_path = template_for_test(test_id)
     else:
         template_path, reference_path = DEFAULT_TEMPLATE, DEFAULT_REFERENCE
@@ -449,8 +454,18 @@ def send_feedback_for_assignment(
         first = student_name.split()[0] if student_name and student_name != "there" else "there"
         # Refresh the missed-question list/overlay against the current key
         # without disturbing the stored scaled/composite scores.
+        # Use the sheet this student's scan actually matched (may differ from
+        # the test's default if they bubbled a different printout).
+        s_template_path, s_reference_path, s_template_dict = template_path, reference_path, template_dict
+        stem = (full.get("score") or {}).get("sheet_template")
+        if stem:
+            from .submissions import sheet_paths
+            cand_tpl, cand_ref = sheet_paths(stem)
+            if cand_tpl.exists():
+                s_template_path, s_reference_path = cand_tpl, cand_ref
+                s_template_dict = json.loads(cand_tpl.read_text())
         email_score = _refresh_missed_details(
-            full, template_dict, current_key, field_test_answers=current_field_test
+            full, s_template_dict, current_key, field_test_answers=current_field_test
         )
         email_full = {**full, "score": email_score}
         report = build_report(email_full, test_name=test_name, scope=scope)
@@ -484,7 +499,7 @@ def send_feedback_for_assignment(
                 ]
                 try:
                     pdf_bytes = build_overlay_pdf(
-                        Path(scan_path), template_path, reference_path, details=details
+                        Path(scan_path), s_template_path, s_reference_path, details=details
                     )
                     fname = f"{_safe_filename(student_name)}_results.pdf"
                     attachments.append((fname, pdf_bytes, "application/pdf"))

@@ -15,7 +15,7 @@ from bubble_grader.config import DATA_DIR
 SHEETS = DATA_DIR / "sheets"
 
 
-@pytest.mark.parametrize("stem", ["act_sheet_new", "act_sheet"])
+@pytest.mark.parametrize("stem", ["act_sheet_new", "act_sheet", "act_sheet_scored"])
 def test_simulated_sheet_reads_back_exactly(tmp_path, stem):
     import cv2
     from bubble_grader.sheet import simulate_fill
