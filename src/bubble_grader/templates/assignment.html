@@ -50,12 +50,13 @@
     <div class="row" style="justify-content: space-between; align-items: center;">
       <h3 style="margin: 0;">Submissions ({{ rows|length }})</h3>
       {% if rows %}
-        <div class="row" style="gap: 8px; align-items: center;">
+        <div style="display: flex; flex-wrap: nowrap; gap: 8px; align-items: center;">
           <button class="btn secondary" type="button" id="sort-btn" onclick="toggleSort()"
+                  style="white-space: nowrap; flex: none;"
                   title="Finished first: graded, then turned in, then not started">Sort: finished first</button>
           <input type="text" id="student-search" placeholder="Search by name or email…"
                  oninput="filterStudents(this.value)"
-                 style="max-width: 280px; margin: 0;">
+                 style="width: 280px; flex: none; margin: 0;">
         </div>
       {% endif %}
     </div>
