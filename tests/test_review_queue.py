@@ -18,7 +18,7 @@ def _template(n_questions=6, options=("A", "B", "C", "D")):
     return {"bubbles": bubbles}
 
 
-def _read_result(per_q: dict, warped=True):
+def _read_result(per_q: dict, warped=True, height_px=700):
     """per_q: q -> (answer, top_fill, second_fill)."""
     fills, answers = {}, {}
     for q, (ans, top, second) in per_q.items():
@@ -31,7 +31,7 @@ def _read_result(per_q: dict, warped=True):
         ]
     out = {"answers": answers, "fills": fills}
     if warped:
-        out["warped"] = np.full((700, 400), 255, dtype=np.uint8)
+        out["warped"] = np.full((height_px, 400), 255, dtype=np.uint8)
         out["warped_dpi"] = 200
     return out
 
@@ -75,7 +75,9 @@ def test_every_blank_row_is_listed_only_crops_are_capped():
     """34 blanks must show 34 rows — a teacher noticed 20. Images are the
     heavy part, so only those are capped."""
     n = REVIEW_MAX_CROPS + 15
-    rr = _read_result({q: ("BLANK", 0.02, 0.01) for q in range(1, n + 1)})
+    # Rows sit at 10 mm * q; make the frame tall enough to hold every row.
+    rr = _read_result({q: ("BLANK", 0.02, 0.01) for q in range(1, n + 1)},
+                      height_px=int((10 * n + 30) * 200 / 25.4))
     out = _review_suspects(rr, _template(n_questions=n))
     assert len(out) == n
     assert sum(1 for s in out if "crop_b64" in s) == REVIEW_MAX_CROPS
