@@ -191,29 +191,33 @@ def _student_scan_tempfile(
     return scan_to_tempfile(scan)
 
 
-def build_overlay_for_student(
-    teacher_email: str, course_id: str, coursework_id: str, student_id: str
-) -> tuple[bytes | None, str | None]:
-    """(pdf_bytes, None) for the student's marked-up sheet, or (None, reason).
+def student_feedback(
+    teacher_email: str,
+    course_id: str,
+    coursework_id: str,
+    student_id: str,
+    *,
+    test_name: str | None = None,
+    want_pdf: bool = True,
+) -> dict:
+    """Everything a return/email needs for one student, built once.
 
-    Mirrors exactly what the feedback email attaches: latest submission,
-    details refreshed against the current key (field-test included), scan
-    pulled from the store (refetched from Drive if the cycle deleted it).
+    Returns {"status": "ok", student_name, student_email, test_name, report,
+    pdf (bytes|None), overlay_error} or {"status": "no_graded_submission"}.
+    Details are refreshed against the current key (field-test included) and
+    the overlay uses the sheet the scan actually matched at grading time.
     """
     rows = dbmod.list_submissions(
         course_id=course_id, coursework_id=coursework_id, student_id=student_id
     )
-    if not rows:
-        return None, "No graded submission for this student yet."
-    full = dbmod.get_submission(rows[0]["id"])
+    full = dbmod.get_submission(rows[0]["id"]) if rows else None
     if not full:
-        return None, "Submission record could not be loaded."
+        return {"status": "no_graded_submission"}
 
     app_asg = dbmod.get_app_assignment(course_id, coursework_id)
     test_id = (app_asg or {}).get("test_id") or full.get("test_id")
+    scope = (app_asg or {}).get("scope")
     from .submissions import sheet_paths, template_for_test
-    # Prefer the sheet this scan actually matched at grading time — a student
-    # may have bubbled a different printout than the test's default sheet.
     stem = (full.get("score") or {}).get("sheet_template")
     if stem and sheet_paths(stem)[0].exists():
         template_path, reference_path = sheet_paths(stem)
@@ -228,24 +232,51 @@ def build_overlay_for_student(
         full, template_dict, (_test or {}).get("answer_key"),
         field_test_answers=(_test or {}).get("field_test_answers"),
     )
+    label = test_name or (_test or {}).get("name")
+    report = build_report({**full, "score": email_score}, test_name=label, scope=scope)
+
+    out = {
+        "status": "ok",
+        "student_name": full.get("student_name") or "there",
+        "student_email": full.get("student_email"),
+        "test_name": label,
+        "report": report,
+        "pdf": None,
+        "overlay_error": None,
+    }
+    if not want_pdf:
+        return out
     details = [
         d
         for sec in (email_score.get("sections") or {}).values()
         for d in (sec.get("details") or [])
     ]
-
     scan_path = _student_scan_tempfile(teacher_email, course_id, coursework_id, student_id)
     if scan_path is None:
-        return None, "No scan on file for this student (and none fetchable from Drive)."
+        out["overlay_error"] = "No scan on file for this student (and none fetchable from Drive)."
+        return out
     try:
-        return build_overlay_pdf(
-            scan_path, template_path, reference_path, details=details
-        ), None
+        out["pdf"] = build_overlay_pdf(scan_path, template_path, reference_path, details=details)
+    except Exception as e:  # noqa: BLE001
+        out["overlay_error"] = f"{type(e).__name__}: {e}"
     finally:
         try:
             os.unlink(scan_path)
         except OSError:
             pass
+    return out
+
+
+def build_overlay_for_student(
+    teacher_email: str, course_id: str, coursework_id: str, student_id: str
+) -> tuple[bytes | None, str | None]:
+    """(pdf_bytes, None) for the student's marked-up sheet, or (None, reason)."""
+    fb = student_feedback(teacher_email, course_id, coursework_id, student_id)
+    if fb["status"] != "ok":
+        return None, "No graded submission for this student yet."
+    if fb["pdf"] is None:
+        return None, fb["overlay_error"] or "Overlay unavailable."
+    return fb["pdf"], None
 
 
 def build_overlay_pdf(

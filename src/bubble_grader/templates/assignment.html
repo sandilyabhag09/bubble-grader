@@ -50,9 +50,13 @@
     <div class="row" style="justify-content: space-between; align-items: center;">
       <h3 style="margin: 0;">Submissions ({{ rows|length }})</h3>
       {% if rows %}
-        <input type="text" id="student-search" placeholder="Search by name or email…"
-               oninput="filterStudents(this.value)"
-               style="max-width: 280px; margin: 0;">
+        <div class="row" style="gap: 8px; align-items: center;">
+          <button class="btn secondary" type="button" id="sort-btn" onclick="toggleSort()"
+                  title="Finished first: graded, then turned in, then not started">Sort: finished first</button>
+          <input type="text" id="student-search" placeholder="Search by name or email…"
+                 oninput="filterStudents(this.value)"
+                 style="max-width: 280px; margin: 0;">
+        </div>
       {% endif %}
     </div>
     {% if not rows %}
@@ -82,7 +86,7 @@
             {% for r in rows %}
               {% set is_partial = scope and scope.type == 'partial' %}
               {% set has_score = (r.partial is not none) if is_partial else (r.composite is not none) %}
-              <tr>
+              <tr data-rank="{{ r.finish_rank }}" data-name="{{ (r.name or r.student_id)|lower }}">
                 <td>
                   <input type="checkbox" name="student_ids" value="{{ r.student_id }}"
                          {% if has_score %}checked{% else %}disabled title="No graded score — can't release"{% endif %}>
@@ -113,7 +117,10 @@
           </tbody>
         </table>
 
-        <div style="margin-top: 16px;" class="muted">Tick a row to include that student. Untick rows to hold them back.</div>
+        <div style="margin-top: 16px;" class="muted">
+          Grades are pushed to Classroom as <strong>drafts</strong> automatically when graded (teachers only).
+          Tick students, then <strong>Return</strong> to make grades official and post each student their marked-up sheet.
+        </div>
 
         <div class="row" style="margin-top: 12px; gap: 16px;">
           <label style="margin: 0; flex: 1;">
@@ -126,18 +133,21 @@
           {% if cw.is_app_owned %}
             <button class="btn secondary" type="submit"
                     formaction="/courses/{{ course.id }}/coursework/{{ cw.id }}/release"
-                    name="action" value="draft">Set draft for selected</button>
-            <button class="btn" type="submit"
-                    formaction="/courses/{{ course.id }}/coursework/{{ cw.id }}/release"
-                    name="action" value="release">Release selected to students</button>
+                    name="action" value="release"
+                    title="Make grades official and return the work — without posting the marked-up sheet">Release grades only</button>
+            <button class="btn" type="button" id="return-btn" onclick="returnAll()"
+                    title="For each ticked student: post their results + marked-up sheet privately in Classroom, make the grade official, and return the work">
+              Return to students (grade + marked-up sheet)
+            </button>
           {% else %}
             <span class="pill warn" title="Created in Classroom UI — Google API rejects grade writes">grade release disabled (not app-owned)</span>
           {% endif %}
           <button class="btn secondary" type="button" id="feedback-btn" onclick="sendFeedback()"
-                  title="Email each selected student their per-section score + missed questions">
-            Send feedback emails
+                  title="Old path: email each ticked student their results + marked-up sheet instead">
+            Email instead
           </button>
         </div>
+        <div id="return-progress" class="muted" style="display:none; margin-top: 12px; font-weight: 500;"></div>
         <div id="feedback-progress" class="muted" style="display:none; margin-top: 12px; font-weight: 500;"></div>
       </form>
     {% endif %}
@@ -180,7 +190,7 @@
   }
 
   function setBusy(busy) {
-    for (const id of ["grade-btn", "feedback-btn"]) {
+    for (const id of ["grade-btn", "feedback-btn", "return-btn"]) {
       const el = document.getElementById(id);
       if (el) el.disabled = busy;
     }
@@ -200,14 +210,14 @@
         setProgress("grade-progress", "No turned-in submissions to grade yet.");
         setBusy(false); return;
       }
-      let graded = 0, failed = 0, firstError = null;
+      let graded = 0, failed = 0, pushed = 0, firstError = null;
       for (let i = 0; i < students.length; i++) {
         const s = students[i];
         setProgress("grade-progress",
           `Grading ${i + 1}/${students.length} — ${s.name}…` + (failed ? ` (${failed} failed so far)` : ""));
         try {
           const r = await postForm(`${BASE}/grade/student`, { student_id: s.student_id, test_id: testId });
-          if (r.status === "graded") graded++;
+          if (r.status === "graded") { graded++; if (r.draft_pushed) pushed++; }
           else { failed++; if (!firstError) firstError = r.error || r.status || "unknown"; console.error("grade failed", s.name, r); }
         } catch (e) { failed++; if (!firstError) firstError = String(e); console.error("grade failed", s.name, e); }
       }
@@ -217,7 +227,7 @@
         setBusy(false);
         return;
       }
-      window.location.href = window.location.pathname + `#graded=${graded}/${students.length},failed=${failed}`;
+      window.location.href = window.location.pathname + `#graded=${graded}/${students.length},failed=${failed},pushed=${pushed}`;
       window.location.reload();
     } catch (e) {
       setProgress("grade-progress", `Error: ${e.message || e}`);
@@ -254,12 +264,63 @@
     setBusy(false);
   }
 
+  async function returnAll() {
+    const ids = Array.from(document.querySelectorAll("input[name=student_ids]:checked:not([disabled])"))
+      .map(c => c.value);
+    if (!ids.length) { alert("No students selected."); return; }
+    if (!confirm(`Return ${ids.length} student(s) in Classroom? Each gets their official grade plus a private post with their marked-up sheet.`)) return;
+    const teacherEl = document.querySelector("input[name=teacher_name]");
+    const teacher = teacherEl ? teacherEl.value : "";
+    setBusy(true);
+    let returned = 0, failed = 0, sheets = 0, firstError = null;
+    for (let i = 0; i < ids.length; i++) {
+      setProgress("return-progress", `Returning ${i + 1}/${ids.length} in Classroom…` + (failed ? ` (${failed} failed)` : ""));
+      try {
+        const r = await postForm(`${BASE}/return/student`, { student_id: ids[i], teacher_name: teacher });
+        if (r.status === "returned") { returned++; if (r.attached_overlay) sheets++; }
+        else { failed++; if (!firstError) firstError = r.error || r.status; console.error("return failed", r); }
+      } catch (e) { failed++; if (!firstError) firstError = String(e); }
+    }
+    let cleanup = "";
+    if (returned && !failed) {
+      try {
+        const done = await postForm(`${BASE}/return/complete`, {});
+        if (done.scans_deleted) cleanup = " Scan files cleaned up.";
+      } catch (e) { /* non-fatal */ }
+    }
+    setProgress("return-progress",
+      `Returned ${returned}/${ids.length} in Classroom — marked-up sheet posted for ${sheets}.` +
+      (failed ? ` ${failed} failed — first error: ${firstError}.` : "") + cleanup);
+    setBusy(false);
+    if (returned) setTimeout(() => window.location.reload(), 2500);
+  }
+
+  // Finished-first (default) <-> A-Z ordering of the submissions table.
+  let sortFinishedFirst = true;
+  function toggleSort() {
+    sortFinishedFirst = !sortFinishedFirst;
+    const tbody = document.querySelector("#submissions-table tbody");
+    const rows = Array.from(tbody.querySelectorAll("tr"));
+    rows.sort((a, b) => {
+      if (sortFinishedFirst) {
+        const d = parseInt(a.dataset.rank || "9", 10) - parseInt(b.dataset.rank || "9", 10);
+        if (d) return d;
+      }
+      return (a.dataset.name || "").localeCompare(b.dataset.name || "");
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    document.getElementById("sort-btn").textContent = sortFinishedFirst ? "Sort: finished first" : "Sort: A–Z";
+  }
+
   // After a grade run reloads the page, surface the summary from the URL hash.
   document.addEventListener("DOMContentLoaded", () => {
-    const m = (window.location.hash || "").match(/#graded=(\d+)\/(\d+),failed=(\d+)/);
+    const m = (window.location.hash || "").match(/#graded=(\d+)\/(\d+),failed=(\d+)(?:,pushed=(\d+))?/);
     if (m) {
       const failed = parseInt(m[3], 10);
-      setProgress("grade-progress", `Graded ${m[1]}/${m[2]} students.` + (failed ? ` ${failed} failed — see rows below.` : ""));
+      const pushed = m[4] !== undefined ? parseInt(m[4], 10) : null;
+      setProgress("grade-progress", `Graded ${m[1]}/${m[2]} students.`
+        + (pushed !== null && parseInt(m[1], 10) > 0 ? ` ${pushed} draft grade(s) pushed to Classroom.` : "")
+        + (failed ? ` ${failed} failed — see rows below.` : ""));
       history.replaceState(null, "", window.location.pathname);
     }
   });

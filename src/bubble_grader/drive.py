@@ -58,3 +58,40 @@ def submission_cache_dir(course_id: str, coursework_id: str, student_id: str) ->
     p = DATA_DIR / "submissions" / course_id / coursework_id / student_id
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+RESULTS_FOLDER = "Grader Form results"
+
+
+def _results_folder_id(svc, folder_name: str = RESULTS_FOLDER) -> str:
+    """Find (or create) the teacher's results folder in their own Drive."""
+    safe = folder_name.replace("'", "\\'")
+    res = svc.files().list(
+        q=(f"name = '{safe}' and mimeType = 'application/vnd.google-apps.folder' "
+           "and trashed = false and 'me' in owners"),
+        fields="files(id)", pageSize=1,
+    ).execute()
+    files = res.get("files", [])
+    if files:
+        return files[0]["id"]
+    created = svc.files().create(
+        body={"name": folder_name, "mimeType": "application/vnd.google-apps.folder"},
+        fields="id",
+    ).execute()
+    return created["id"]
+
+
+def upload_pdf(email: str, name: str, data: bytes) -> dict:
+    """Upload PDF bytes to the teacher's Drive results folder. Returns {id, webViewLink}.
+
+    Needs the drive.file scope (files created by this app only)."""
+    import io
+    from googleapiclient.http import MediaIoBaseUpload
+
+    svc = _drive(email)
+    media = MediaIoBaseUpload(io.BytesIO(data), mimetype="application/pdf", resumable=False)
+    return svc.files().create(
+        body={"name": name, "parents": [_results_folder_id(svc)]},
+        media_body=media,
+        fields="id,webViewLink",
+    ).execute()

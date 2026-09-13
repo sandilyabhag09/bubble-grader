@@ -227,3 +227,30 @@ def return_submission(
     )
     invalidate("submissions", email, course_id, coursework_id)
     return result
+
+
+def create_student_announcement(
+    email: str,
+    course_id: str,
+    text: str,
+    *,
+    student_ids: list[str],
+    drive_file_id: str | None = None,
+) -> dict:
+    """Post an announcement visible only to the given students (and teachers).
+
+    This is how graded work gets 'returned with a marked-up sheet': Classroom's
+    API doesn't let a teacher attach files to a STUDENT's submission, but a
+    private announcement carrying the Drive file reaches exactly that student.
+    Needs the classroom.announcements scope.
+    """
+    body: dict = {
+        "text": text,
+        "state": "PUBLISHED",
+        "assigneeMode": "INDIVIDUAL_STUDENTS",
+        "individualStudentsOptions": {"studentIds": list(student_ids)},
+    }
+    if drive_file_id:
+        body["materials"] = [{"driveFile": {"driveFile": {"id": drive_file_id}, "shareMode": "VIEW"}}]
+    svc = service_for(email, "classroom", "v1")
+    return svc.courses().announcements().create(courseId=course_id, body=body).execute()
