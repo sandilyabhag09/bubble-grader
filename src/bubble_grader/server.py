@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
@@ -71,6 +72,15 @@ _session_secret = base64.urlsafe_b64encode(FERNET_KEY).decode()
 app.add_middleware(SessionMiddleware, secret_key=_session_secret, session_cookie="bg_session")
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    # Browsers request this path unprompted; serve the multi-size ICO.
+    return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
+
 # Build the Jinja Environment ourselves so we can disable the LRUCache.
 # On Python 3.14, Jinja 3.1.x's LRUCache hits a "tuple is not hashable" path;
 # we don't need template caching at this scale and skipping it sidesteps it.
