@@ -409,6 +409,9 @@
     .row { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; }
     .stack { display: flex; flex-direction: column; gap: var(--space-3); }
     .muted { color: var(--color-fg-muted); font-size: 13px; }
+    /* Did-not-finish section: crossed off, but the DNF label itself stays legible. */
+    tr.dnf td { text-decoration: line-through; color: var(--color-fg-muted); }
+    tr.dnf td .no-strike { text-decoration: none; display: inline-block; }
     .subtle { color: var(--color-fg-subtle); }
     code {
       font-family: var(--font-mono);

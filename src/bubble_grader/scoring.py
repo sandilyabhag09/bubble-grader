@@ -201,7 +201,22 @@ def grade_answers(
         sec["n_questions"] = (
             sec["n_correct"] + sec["n_incorrect"] + sec["n_blank"] + sec["n_multi"]
         )
+        sec["dnf"] = section_is_dnf(sec)
     return sections
+
+
+def section_is_dnf(info: dict | None) -> bool:
+    """Did-not-finish: every scored question in the section is blank.
+
+    Display-only concept — the section still scales to its floor (1) and the
+    composite is computed from that, exactly as ACT does. Gradebook views show
+    "DNF" instead of the misleading "1"; emails and override rows are unchanged.
+    Computed from counts so grades stored before the flag existed work too.
+    """
+    if not info:
+        return False
+    n = info.get("n_questions") or 0
+    return n > 0 and (info.get("n_blank") or 0) == n
 
 
 def partial_summary(report: dict, scope: dict) -> dict:

@@ -38,7 +38,7 @@ from .google_auth import (
     exchange_code,
 )
 from .feedback import send_feedback_for_assignment
-from .scoring import full_grade
+from .scoring import full_grade, section_is_dnf
 from .submissions import (
     fetch_assignment,
     grade_classroom_assignment,
@@ -428,7 +428,8 @@ def course_student_detail(request: Request, course_id: str, student_id: str):
             d = secs.get(sec) or {}
             per_section[sec] = {
                 "raw": d.get("raw_score"),
-                "scaled": d.get("scaled"),
+                "scaled": d.get("scaled_score", d.get("scaled")),
+                "dnf": section_is_dnf(d),
             }
         rows.append({
             "id": s["id"],
@@ -568,8 +569,11 @@ def _section_scaled_summary(score: dict | None) -> str:
     sps = score.get("scaled_per_section") or {}
     if not sps:
         return ""
+    sections = score.get("sections") or {}
     order = ["Test 1", "Test 2", "Test 3", "Test 4"]
-    return " / ".join(str(sps.get(s, "—")) for s in order)
+    return " / ".join(
+        "DNF" if section_is_dnf(sections.get(s)) else str(sps.get(s, "—")) for s in order
+    )
 
 
 @app.get("/courses/{course_id}/coursework/{cw_id}", response_class=HTMLResponse)
@@ -1062,6 +1066,7 @@ def student_detail_view(request: Request, course_id: str, cw_id: str, student_id
         skipped_wrong = sum(1 for d in ft if d.get("status") in ("incorrect", "blank", "multi"))
         sections.append({
             "display": _SECTION_LABELS.get(k, k), "info": info,
+            "dnf": section_is_dnf(info),
             "skipped_correct": skipped_correct,
             "skipped_wrong": skipped_wrong,
             "skipped": skipped_correct + skipped_wrong,

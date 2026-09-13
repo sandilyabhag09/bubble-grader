@@ -69,7 +69,7 @@
               {% if r.sections[sec].raw is not none or r.sections[sec].scaled is not none %}
                 {{ r.sections[sec].raw if r.sections[sec].raw is not none else "—" }}
                 /
-                {{ r.sections[sec].scaled if r.sections[sec].scaled is not none else "—" }}
+                {% if r.sections[sec].dnf %}<span title="did not finish — section left blank">DNF</span>{% else %}{{ r.sections[sec].scaled if r.sections[sec].scaled is not none else "—" }}{% endif %}
               {% else %}
                 <span class="muted">—</span>
               {% endif %}

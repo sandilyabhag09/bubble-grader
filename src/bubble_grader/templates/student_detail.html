@@ -30,10 +30,10 @@
       </thead>
       <tbody>
         {% for sec in sections %}
-        <tr>
-          <td>{{ sec.display }}</td>
+        <tr {% if sec.dnf %}class="dnf"{% endif %}>
+          <td>{{ sec.display }}{% if sec.dnf %} <span class="pill warn no-strike" title="Every question in this section was left blank. It still scales to 1 for the composite.">did not finish</span>{% endif %}</td>
           <td>{{ sec.info.raw_score }}/{{ sec.info.n_questions }}</td>
-          <td><strong>{{ sec.info.scaled_score if sec.info.scaled_score is not none else "—" }}</strong></td>
+          <td><strong class="no-strike">{% if sec.dnf %}DNF{% else %}{{ sec.info.scaled_score if sec.info.scaled_score is not none else "—" }}{% endif %}</strong></td>
           <td>{{ sec.info.n_correct }}{% if sec.skipped %} <span class="muted">({{ sec.skipped_correct }} skipped)</span>{% endif %}</td>
           <td>{{ sec.info.n_incorrect }}{% if sec.skipped %} <span class="muted">({{ sec.skipped_wrong }} skipped)</span>{% endif %}</td>
           <td>{{ sec.info.n_blank }}</td>
