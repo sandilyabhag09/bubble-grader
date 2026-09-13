@@ -359,7 +359,7 @@ def grade_classroom_assignment(
     only_turned_in: bool = True,
     refetch: bool = True,
     only_students: list[str] | None = None,
-    push_draft_grades: bool = True,
+    push_grades: bool = True,
 ) -> dict[str, Any]:
     """Fetch → read → grade → persist for every student in one assignment.
 
@@ -535,28 +535,29 @@ def grade_classroom_assignment(
         except Exception:  # noqa: BLE001
             pass
 
-    # Push each new grade to Classroom as a DRAFT (teacher-visible only) so the
-    # gradebook fills in by itself; "Return" later makes it official. Only
-    # app-created assignments accept grade writes, so skip the rest quietly.
+    # Send each new grade straight to the student: set it as the official grade
+    # and return the submission so it shows up in Classroom the moment a
+    # turn-in is graded. Only app-created assignments accept grade writes, so
+    # skip the rest quietly. Overrides re-release via the assignment page.
     graded_ids = [r["student_id"] for r in results if r.get("status") == "graded"]
-    if push_draft_grades and graded_ids and app_asg is not None:
+    if push_grades and graded_ids and app_asg is not None:
         try:
             rel = release_grades(
                 email, course_id, coursework_id,
-                draft_only=True, only_students=graded_ids,
+                return_to_student=True, only_students=graded_ids,
             )
             by_sid = {x.get("student_id"): x for x in rel.get("results", [])}
             for r in results:
                 if r.get("status") == "graded":
                     x = by_sid.get(r["student_id"], {})
-                    r["draft_pushed"] = x.get("status") == "draft_set"
-                    if not r["draft_pushed"]:
-                        r["draft_error"] = x.get("error") or x.get("status") or "not pushed"
+                    r["grade_pushed"] = x.get("status") in ("returned", "grade_assigned")
+                    if not r["grade_pushed"]:
+                        r["push_error"] = x.get("error") or x.get("status") or "not pushed"
         except Exception as e:  # noqa: BLE001 — the grade itself is safe in our DB
             for r in results:
                 if r.get("status") == "graded":
-                    r["draft_pushed"] = False
-                    r["draft_error"] = f"{type(e).__name__}: {e}"
+                    r["grade_pushed"] = False
+                    r["push_error"] = f"{type(e).__name__}: {e}"
 
     return {
         "test_id": test_id,

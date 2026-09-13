@@ -820,8 +820,8 @@ def assignment_grade_student(
         "student_id": student_id,
         "status": r.get("status"),
         "composite": r.get("composite"),
-        "draft_pushed": r.get("draft_pushed"),
-        "error": r.get("error") or r.get("draft_error"),
+        "grade_pushed": r.get("grade_pushed"),
+        "error": r.get("error") or r.get("push_error"),
     }
 
 
@@ -852,49 +852,6 @@ def assignment_feedback_student(
         "attached_overlay": bool(r.get("attached_overlay")),
         "error": r.get("error") or r.get("overlay_error"),
     }
-
-
-@app.post("/courses/{course_id}/coursework/{cw_id}/return/student")
-def assignment_return_student(
-    request: Request, course_id: str, cw_id: str,
-    student_id: str = Form(...), teacher_name: str = Form(""),
-):
-    """Return one student's work in Classroom: final grade + returned submission
-    + a private Classwork material carrying their marked-up sheet. No email."""
-    email = _require_json(request)
-    if isinstance(email, JSONResponse):
-        return email
-    owned = dbmod.get_app_assignment(course_id, cw_id)
-    if not owned:
-        return JSONResponse({"error": "This assignment wasn't created by Grader Form, so "
-                                      "Classroom won't accept grade writes for it."}, status_code=400)
-    test_obj = dbmod.get_test(owned.get("test_id")) if owned.get("test_id") else None
-    from .google_api import missing_scopes
-    if missing_scopes(email):
-        return JSONResponse({"error": "Your Google sign-in predates this feature and is missing "
-                                      "a Classroom permission. Sign out and sign back in, "
-                                      "accept the new permission, then Return again."},
-                            status_code=409)
-    from .classroom_return import return_to_student
-    try:
-        r = return_to_student(
-            email, course_id, cw_id, student_id,
-            test_name=(test_obj or {}).get("name"),
-            teacher_name=teacher_name.strip() or None,
-        )
-    except Exception as e:  # noqa: BLE001
-        import traceback; traceback.print_exc()
-        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
-    return r
-
-
-@app.post("/courses/{course_id}/coursework/{cw_id}/return/complete")
-def assignment_return_complete(request: Request, course_id: str, cw_id: str):
-    """End of a return cycle: drop the assignment's stored scans."""
-    email = _require_json(request)
-    if isinstance(email, JSONResponse):
-        return email
-    return {"scans_deleted": dbmod.delete_assignment_scans(course_id, cw_id)}
 
 
 @app.post("/courses/{course_id}/coursework/{cw_id}/feedback/complete")

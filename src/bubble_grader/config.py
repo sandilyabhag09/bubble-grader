@@ -68,12 +68,5 @@ SCOPES = [
     "https://www.googleapis.com/auth/classroom.coursework.students",
     "https://www.googleapis.com/auth/classroom.profile.emails",
     "https://www.googleapis.com/auth/drive.readonly",
-    # Return-in-Classroom: upload the marked-up sheet (drive.file = only files
-    # this app creates) and post it to the student as a Classwork material
-    # under a "Graded results" topic — Classwork, not the Stream, so 20
-    # students' results don't bury the class feed.
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/classroom.courseworkmaterials",
-    "https://www.googleapis.com/auth/classroom.topics",
     "https://www.googleapis.com/auth/gmail.send",
 ]
