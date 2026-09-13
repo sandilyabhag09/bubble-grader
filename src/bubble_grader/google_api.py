@@ -64,6 +64,18 @@ def _credentials_for(email: str):
     return creds
 
 
+def missing_scopes(email: str) -> list[str]:
+    """Scopes the app now asks for that this teacher's stored token was never
+    granted — i.e. they signed in before a feature added a permission and need
+    to sign out and back in. Empty list when the token is complete."""
+    from .config import SCOPES
+    creds = _credentials_for(email)
+    have = set(getattr(creds, "scopes", None) or [])
+    if not have:
+        return []
+    return [s for s in SCOPES if s != "openid" and s not in have]
+
+
 def service_for(email: str, service: str, version: str):
     """Return a discovery client (e.g. classroom v1, drive v3) for the given teacher."""
     creds = _credentials_for(email)

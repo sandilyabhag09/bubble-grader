@@ -120,3 +120,14 @@ def test_finished_first_ranking():
     assert _finish_rank({"composite": None, "partial": None, "classroom_state": "TURNED_IN"}) == 1
     assert _finish_rank({"composite": None, "partial": None, "classroom_state": "RETURNED"}) == 1
     assert _finish_rank({"composite": None, "partial": None, "classroom_state": "CREATED"}) == 2
+
+
+def test_missing_scopes_detects_stale_token(monkeypatch):
+    import bubble_grader.google_api as ga
+    class Creds:
+        scopes = ["openid", "https://www.googleapis.com/auth/classroom.courses.readonly"]
+    monkeypatch.setattr(ga, "_credentials_for", lambda email: Creds())
+    missing = ga.missing_scopes("t@x")
+    assert "https://www.googleapis.com/auth/classroom.courseworkmaterials" in missing
+    Creds.scopes = list(SCOPES)
+    assert ga.missing_scopes("t@x") == []

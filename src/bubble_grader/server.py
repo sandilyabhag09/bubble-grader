@@ -869,6 +869,12 @@ def assignment_return_student(
         return JSONResponse({"error": "This assignment wasn't created by Grader Form, so "
                                       "Classroom won't accept grade writes for it."}, status_code=400)
     test_obj = dbmod.get_test(owned.get("test_id")) if owned.get("test_id") else None
+    from .google_api import missing_scopes
+    if missing_scopes(email):
+        return JSONResponse({"error": "Your Google sign-in predates this feature and is missing "
+                                      "a Classroom permission. Sign out and sign back in, "
+                                      "accept the new permission, then Return again."},
+                            status_code=409)
     from .classroom_return import return_to_student
     try:
         r = return_to_student(
