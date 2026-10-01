@@ -116,3 +116,27 @@ def test_webhook_requires_token(monkeypatch):
         assert client.post("/hooks/classroom?token=wrong", json={}).status_code == 404
         r = client.post("/hooks/classroom?token=sekrit", json={})
         assert r.status_code == 200 and r.json()["status"] == "ignored"
+
+
+def test_cron_ping_purges_old_scans(db, monkeypatch):
+    """Quiet stretches (nothing graded) must not let scans outlive retention."""
+    from starlette.testclient import TestClient
+    import bubble_grader.server as server
+    import bubble_grader.auto_grade as auto_grade
+    monkeypatch.setattr(server, "AUTO_GRADE_TOKEN", "tok")
+    monkeypatch.setattr(auto_grade, "run_auto_grade_once", lambda **k: {
+        "assignments_checked": 0, "students_graded": 0, "students_failed": 0, "details": []})
+    db.store_scan_file("c", "cw", "s1", "old", name="x.png", mime="image/png", content=b"x",
+                       error=None, student_name="Kid", student_email="k@x",
+                       classroom_submission_id="cs1", state="TURNED_IN")
+    db.store_scan_file("c", "cw", "s2", "new", name="y.png", mime="image/png", content=b"y",
+                       error=None, student_name="Kid2", student_email="k2@x",
+                       classroom_submission_id="cs2", state="TURNED_IN")
+    from bubble_grader.db_backend import get_conn
+    with get_conn() as conn:
+        conn.execute("UPDATE scan_files SET fetched_at = '2020-01-01 00:00:00' WHERE file_id = 'old'")
+    with TestClient(server.app) as client:
+        r = client.get("/cron/auto-grade?token=tok")
+    assert r.status_code == 200 and r.json()["scans_purged"] == 1
+    assert [s for s in db.list_scan_students("c", "cw")] and db.get_student_scan("c", "cw", "s1") is None
+    assert db.get_student_scan("c", "cw", "s2") is not None

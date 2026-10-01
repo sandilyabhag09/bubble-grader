@@ -905,7 +905,14 @@ def cron_auto_grade(token: str = ""):
         registrations = {"error": f"{type(e).__name__}: {e}"}
     summary = run_auto_grade_once(max_students=10, time_budget=180)
     summary["registrations"] = registrations
-    if summary["students_graded"] or summary["students_failed"] or registrations.get("registered"):
+    # Scans are only swept when something gets graded; in a quiet stretch they
+    # would outlive the retention window, so sweep on every ping too.
+    try:
+        summary["scans_purged"] = dbmod.purge_old_scans()
+    except Exception as e:  # noqa: BLE001 — housekeeping must never fail the ping
+        summary["scans_purged"] = f"error: {type(e).__name__}: {e}"
+    if (summary["students_graded"] or summary["students_failed"]
+            or registrations.get("registered") or summary["scans_purged"]):
         print(f"[auto-grade] {summary}")
     return summary
 
