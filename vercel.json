@@ -4,7 +4,8 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 300,
-      "includeFiles": "**"
+      "includeFiles": "{src/**,data/sheets/**,data/scoring/**}",
+      "excludeFiles": "{.venv/**,.git/**,tests/**,**/__pycache__/**,data/backups/**,data/submissions/**}"
     }
   }
 }
