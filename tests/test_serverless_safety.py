@@ -55,3 +55,30 @@ def test_sheet_paths_are_absolute():
     assert DEFAULT_SHEETS_DIR.is_absolute()
     assert DEFAULT_TEMPLATE.is_absolute() and DEFAULT_REFERENCE.is_absolute()
     assert DEFAULT_TEMPLATE.exists() and DEFAULT_REFERENCE.exists()
+
+
+def test_deep_health_reports_grading_dependencies():
+    """/healthz/deep must load the lazily-imported grading stack and find every
+    sheet template — it is how a deploy proves its bundle is complete."""
+    from starlette.testclient import TestClient
+    import bubble_grader.server as server
+    from bubble_grader.submissions import SHEET_LAYOUTS
+    with TestClient(server.app) as client:
+        r = client.get("/healthz/deep")
+    body = r.json()
+    assert r.status_code == 200 and body["ok"] is True, body
+    assert body["checks"]["import:cv2"] is True
+    for stem in SHEET_LAYOUTS:
+        assert body["checks"][f"sheet:{stem}"] is True
+
+
+def test_vercel_bundle_is_scoped():
+    """Bundling '**' pulled the build cache's virtualenv in and blew the 500 MB
+    function limit; the bundle must name what it needs and exclude the venv."""
+    import json
+    from bubble_grader.config import PROJECT_ROOT
+    fn = json.loads((PROJECT_ROOT / "vercel.json").read_text())["functions"]["api/index.py"]
+    assert fn["includeFiles"] != "**"
+    for needed in ("src/**", "data/sheets/**"):
+        assert needed in fn["includeFiles"]
+    assert ".venv/**" in fn["excludeFiles"]

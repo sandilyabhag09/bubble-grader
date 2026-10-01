@@ -884,6 +884,31 @@ def healthz():
     return {"ok": True}
 
 
+@app.get("/healthz/deep")
+def healthz_deep():
+    """Is the grading machinery actually in this deployment?
+
+    The app imports its imaging libraries lazily, so a bundle that lost them
+    (or the sheet templates) still boots and passes /healthz — and only fails
+    when a student turns something in. This loads each one and reports
+    booleans; nothing sensitive, so no auth. 503 if anything is missing.
+    """
+    import importlib
+    checks: dict[str, bool] = {}
+    for mod in ("cv2", "numpy", "PIL", "pillow_heif", "pypdfium2", "pypdf", "psycopg"):
+        try:
+            importlib.import_module(mod)
+            checks[f"import:{mod}"] = True
+        except Exception:  # noqa: BLE001
+            checks[f"import:{mod}"] = False
+    from .submissions import SHEET_LAYOUTS, sheet_paths
+    for stem in SHEET_LAYOUTS:
+        template, reference = sheet_paths(stem)
+        checks[f"sheet:{stem}"] = template.exists() and reference.exists()
+    ok = all(checks.values())
+    return JSONResponse({"ok": ok, "checks": checks}, status_code=200 if ok else 503)
+
+
 @app.get("/cron/auto-grade")
 def cron_auto_grade(token: str = ""):
     """Grade everything newly turned in — trigger for an external pinger.
