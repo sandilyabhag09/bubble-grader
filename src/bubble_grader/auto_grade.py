@@ -143,6 +143,7 @@ def run_auto_grade_once(
                 if _out_of_budget():
                     summary["truncated"] = True
                     return summary
+                marked: list[tuple] = []
                 try:
                     summary["assignments_checked"] += 1
                     pending = _newly_turned_in(email, course_id, cw_id)
@@ -155,7 +156,8 @@ def run_auto_grade_once(
                         pending = pending[:max(0, room)]
                     if not pending:
                         return summary
-                    _attempted.update(key for _sid, key in pending)
+                    marked = [key for _sid, key in pending]
+                    _attempted.update(marked)
                     students = [sid for sid, _key in pending]
                     template_path, _ref = template_for_test(test_id)
                     result = grade_classroom_assignment(
@@ -173,6 +175,7 @@ def run_auto_grade_once(
                             "error": r.get("error"),
                         })
                 except Exception as e:  # noqa: BLE001 — never let one assignment break the loop
+                    _attempted.difference_update(marked)  # transient failure: retry next sweep
                     liveness = _assignment_liveness(email, course_id, cw_id)
                     if liveness == "deleted":
                         # Gone from Classroom for good — stop tracking it, so it

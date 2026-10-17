@@ -22,9 +22,10 @@ from .google_auth import (
     ensure_fresh,
 )
 
-# Long enough that a stream of Classroom notifications for one teacher reads
-# the credentials from the database once, not every few minutes.
-_CREDS_TTL_SECONDS = 45 * 60
+# Long enough that a teacher's credentials are read from the database about
+# once a day per instance, not on every burst of Classroom notifications.
+# A revoked grant drops the entry immediately (see _credentials_for).
+_CREDS_TTL_SECONDS = 12 * 60 * 60
 _creds_cache: dict[str, tuple[object, dict, float]] = {}  # email -> (creds, raw, expires_at)
 _lock = threading.Lock()
 
@@ -54,13 +55,19 @@ def _credentials_for(email: str):
         with _lock:
             _creds_cache[email] = (creds, raw, now + _CREDS_TTL_SECONDS)
 
-    creds = ensure_fresh(creds)
-    # If refresh issued a new access token, persist it (refresh_token is unchanged)
-    # and remember the new token so we don't re-persist on the next call.
+    from google.auth.exceptions import RefreshError
+    try:
+        creds = ensure_fresh(creds)
+    except RefreshError:
+        forget_credentials(email)  # revoked/expired grant: re-read after a re-sign-in
+        raise
     if creds.token != raw.get("token"):
         new = credentials_to_dict(creds)
         new["id_token"] = raw.get("id_token")  # id_token isn't reissued on refresh
-        store_credentials(email, new)
+        # Only a new refresh token is worth a database write; a fresh access
+        # token is cheap to mint again and saving it would wake the database.
+        if creds.refresh_token != raw.get("refresh_token"):
+            store_credentials(email, new)
         with _lock:
             _creds_cache[email] = (creds, new, now + _CREDS_TTL_SECONDS)
     return creds

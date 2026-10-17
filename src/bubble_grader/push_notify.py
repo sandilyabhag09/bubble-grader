@@ -31,36 +31,37 @@ SUBMISSIONS_COLLECTION = "courses.courseWork.studentSubmissions"
 # A registered course reports every submission change on every assignment —
 # students opening work, the app's own grade write-back, assignments the app
 # doesn't own. Each would otherwise wake the database just to be ignored, so
-# remember per assignment whether we own it and which teacher to act as.
-# "Not ours" is kept briefly in case the app records the assignment moments
-# after Classroom starts sending events for it (forget_ownership clears it).
-OWNED_TTL_SECONDS = 30 * 60
-NOT_OWNED_TTL_SECONDS = 10 * 60
-_ownership: dict[tuple[str, str], tuple[float, dict | None, str | None]] = {}
+# remember per course which assignments are ours and which teacher to act as:
+# one read answers every event in that course until it expires. An assignment
+# created on another instance can be missed until then; the hourly sweep
+# grades anything push dropped.
+OWNERSHIP_TTL_SECONDS = 15 * 60
+_ownership: dict[str, tuple[float, dict[str, dict], str | None]] = {}
 
 
 def forget_ownership(course_id: str | None = None, coursework_id: str | None = None) -> None:
+    """Drop the cached ownership for a course (or everything)."""
     if course_id is None:
         _ownership.clear()
     else:
-        _ownership.pop((course_id, coursework_id), None)
+        _ownership.pop(course_id, None)
 
 
 def _owner(course_id: str, cw_id: str) -> tuple[dict | None, str | None]:
     """(app_assignments row or None, teacher email to act as or None)."""
     now = time.monotonic()
-    hit = _ownership.get((course_id, cw_id))
-    if hit and hit[0] > now:
-        return hit[1], hit[2]
-    owned = dbmod.get_app_assignment(course_id, cw_id)
-    if not owned or not owned.get("test_id"):
-        _ownership[(course_id, cw_id)] = (now + NOT_OWNED_TTL_SECONDS, None, None)
-        return None, None
-    reg = dbmod.get_push_registration(course_id) or {}
-    teachers = _teacher_candidates(reg.get("teacher_email") or owned.get("created_by"))
-    email = teachers[0] if teachers else None
-    _ownership[(course_id, cw_id)] = (now + OWNED_TTL_SECONDS, owned, email)
-    return owned, email
+    hit = _ownership.get(course_id)
+    if not hit or hit[0] <= now:
+        rows = {r["coursework_id"]: r for r in dbmod.list_app_assignments(course_id)}
+        email = None
+        if rows:
+            reg = dbmod.get_push_registration(course_id) or {}
+            creator = next((r.get("created_by") for r in rows.values() if r.get("created_by")), None)
+            teachers = _teacher_candidates(reg.get("teacher_email") or creator)
+            email = teachers[0] if teachers else None
+        hit = (now + OWNERSHIP_TTL_SECONDS, rows, email)
+        _ownership[course_id] = hit
+    return hit[1].get(cw_id), hit[2]
 
 
 def _parse_ts(ts) -> datetime | None:
@@ -172,7 +173,7 @@ def handle_notification(body: dict) -> dict:
 
     owned, email = _owner(course_id, cw_id)
     if not owned:
-        return {"status": "ignored", "reason": "not an app-owned assignment with a test"}
+        return {"status": "ignored", "reason": "not an app-owned assignment"}
     if not email:
         return {"status": "ignored", "reason": "no teacher credentials"}
 

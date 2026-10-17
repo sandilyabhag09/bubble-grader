@@ -71,7 +71,18 @@ def credentials_to_dict(creds: Credentials) -> dict:
     }
 
 
+def _naive_utc(iso: str | None):
+    """google-auth compares expiry against a naive UTC clock."""
+    if not iso:
+        return None
+    from datetime import datetime, timezone
+    dt = datetime.fromisoformat(iso)
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+
 def credentials_from_dict(d: dict) -> Credentials:
+    # Carry the expiry over so a stale access token is refreshed up front
+    # rather than discovered by a 401 from Google.
     return Credentials(
         token=d.get("token"),
         refresh_token=d.get("refresh_token"),
@@ -79,6 +90,7 @@ def credentials_from_dict(d: dict) -> Credentials:
         client_id=d.get("client_id"),
         client_secret=d.get("client_secret"),
         scopes=d.get("scopes"),
+        expiry=_naive_utc(d.get("expiry")),
     )
 
 

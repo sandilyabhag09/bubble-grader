@@ -63,15 +63,17 @@ async def lifespan(_app: FastAPI):
             if is_postgres():
                 # A shared hosted database is already swept by the hosted app;
                 # polling it every minute from a laptop would keep it awake.
-                print("[auto-grade] local poller off: DATABASE_URL is the shared "
-                      "database, which the hosted app already grades.")
+                print("[auto-grade] local poller off: DATABASE_URL points at Postgres, "
+                      "which the hosted app's push handler and hourly sweep already grade.")
             else:
                 from .auto_grade import start_auto_grade_poller
                 start_auto_grade_poller()
     yield
 
 
-app = FastAPI(title="Grader Form v2", lifespan=lifespan)
+# No auto-generated API docs: they would publish every internal route.
+app = FastAPI(title="Grader Form v2", lifespan=lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
 
 # Cookie session secret derived from FERNET_KEY (already stored in .env).
 # Sessions hold {"email": "...", "flash": {...}} between requests.
@@ -938,10 +940,19 @@ def _now_minutes() -> int:
     return int(time.time() // 60)
 
 
-def _sweep_due(epoch_minutes: int, every: int = CRON_SWEEP_MINUTES) -> bool:
-    """True for the one 5-minute ping per ``every``-minute cycle that should
-    touch the database (the first ping of each cycle, on wall-clock time)."""
-    return epoch_minutes % every < PING_INTERVAL_MINUTES
+_last_sweep_minute: int | None = None
+
+
+def _sweep_due(epoch_minutes: int, every: int = CRON_SWEEP_MINUTES,
+               last_sweep: int | None = None) -> bool:
+    """Should this ping touch the database? Yes for a ping in the first two
+    ping-intervals of each ``every``-minute cycle (wall-clock), unless this
+    instance already swept within half a cycle — so a ping arriving a little
+    early or late still lands in the window, and the window's second ping is
+    skipped."""
+    in_window = epoch_minutes % every < 2 * PING_INTERVAL_MINUTES
+    recent = last_sweep is not None and epoch_minutes - last_sweep < every // 2
+    return in_window and not recent
 
 
 @app.get("/cron/auto-grade")
@@ -951,14 +962,15 @@ def cron_auto_grade(token: str = "", force: str = ""):
     Serverless hosts can't run background threads, so an external pinger
     (UptimeRobot every 5 minutes) hits this; every ping keeps the function
     warm, but only one ping per CRON_SWEEP_MINUTES touches the database (see
-    config). ``force=1`` runs the sweep now. Bounded by time so one run always
-    fits the request time limit; leftovers are picked up by the next sweep.
+    config). ``force=1`` runs the sweep now. Bounded (25 students, 180 s) so
+    one run fits the request time limit; leftovers go to the next sweep.
     Requires AUTO_GRADE_TOKEN.
     """
     if not AUTO_GRADE_TOKEN or token != AUTO_GRADE_TOKEN:
         raise HTTPException(404, "Not found.")
+    global _last_sweep_minute
     now_min = _now_minutes()
-    if force not in ("1", "true", "yes") and not _sweep_due(now_min):
+    if force not in ("1", "true", "yes") and not _sweep_due(now_min, last_sweep=_last_sweep_minute):
         wait = (CRON_SWEEP_MINUTES - now_min % CRON_SWEEP_MINUTES) % CRON_SWEEP_MINUTES
         return {"swept": False, "next_sweep_in_minutes": wait,
                 "why": "warm-up ping only; the database sweep runs every "
@@ -971,7 +983,11 @@ def cron_auto_grade(token: str = "", force: str = ""):
         registrations = ensure_registrations(time_budget=30)
     except Exception as e:  # noqa: BLE001 — never block grading on this
         registrations = {"error": f"{type(e).__name__}: {e}"}
-    summary = run_auto_grade_once(time_budget=180)
+    _last_sweep_minute = now_min
+    # The time budget is only checked between assignments, so a student cap
+    # keeps one big backlog inside the 300 s function limit; leftovers stay
+    # unmarked and go to the next sweep.
+    summary = run_auto_grade_once(max_students=25, time_budget=180)
     summary["swept"] = True
     summary["registrations"] = registrations
     # Scans are only swept when something gets graded; in a quiet stretch they

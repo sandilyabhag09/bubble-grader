@@ -21,10 +21,29 @@ def _forbid_db(monkeypatch):
     monkeypatch.setattr(dbb, "get_conn", boom)
 
 
+def _sweeps(pings, every=60):
+    last, n = None, 0
+    for m in pings:
+        if server._sweep_due(m, every=every, last_sweep=last):
+            last, n = m, n + 1
+    return n
+
+
 @pytest.mark.parametrize("offset", [0, 1, 2, 3, 4])
 def test_exactly_one_sweep_per_hour_whatever_the_ping_phase(offset):
     pings = [offset + 5 * k for k in range(24 * 12)]  # one day of 5-minute pings
-    assert sum(server._sweep_due(m, every=60) for m in pings) == 24
+    assert _sweeps(pings) == 24
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_jittery_pings_still_sweep_every_hour(seed):
+    import random
+    rng = random.Random(seed)
+    t, pings = rng.uniform(0, 5), []
+    while t < 24 * 60:
+        pings.append(int(t))
+        t += 5 + rng.uniform(-0.75, 0.75)   # UptimeRobot drifts by tens of seconds
+    assert _sweeps(pings) == 24
 
 
 def test_off_hour_ping_does_not_touch_the_database(monkeypatch):
@@ -116,7 +135,7 @@ def test_students_left_over_by_a_capped_sweep_are_graded_next_time(monkeypatch):
     assert sorted(graded) == sorted(f"s{i}" for i in range(12))
 
 
-def test_cron_sweep_has_no_student_cap(monkeypatch):
+def test_cron_sweep_is_capped_to_fit_the_function_limit(monkeypatch):
     monkeypatch.setattr(server, "AUTO_GRADE_TOKEN", "tok")
     import bubble_grader.auto_grade as ag
     import bubble_grader.push_notify as pn
@@ -129,7 +148,7 @@ def test_cron_sweep_has_no_student_cap(monkeypatch):
     monkeypatch.setattr(server.dbmod, "purge_old_scans", lambda: 0)
     with TestClient(server.app) as client:
         assert client.get("/cron/auto-grade?token=tok&force=1").json()["swept"] is True
-    assert "max_students" not in seen and seen.get("time_budget")
+    assert seen == {"max_students": 25, "time_budget": 180}
 
 
 def test_cron_without_token_is_404_even_with_odd_params():
@@ -209,3 +228,132 @@ def test_turn_in_is_graded_against_the_current_test_not_a_cached_one(db, monkeyp
     pn.handle_notification(body)
     assert used == ["new-test"]
     pn.forget_ownership()
+
+
+def test_one_read_answers_every_event_in_a_course(db, monkeypatch):
+    """Events for many different assignments the app doesn't own must not each
+    wake the database: ownership is cached per course."""
+    import base64, json
+    import bubble_grader.push_notify as pn
+    pn.forget_ownership()
+    db.record_app_assignment("c", "ours", test_id="t", title="T", created_by="t@x")
+    monkeypatch.setattr(pn.dbmod, "list_teachers", lambda: ["t@x"])
+    monkeypatch.setattr(pn, "get_submission", lambda *a: {"state": "RETURNED", "userId": "s1"})
+    calls = {"n": 0}
+    real = pn.dbmod.list_app_assignments
+    def counting(course_id):
+        calls["n"] += 1
+        return real(course_id)
+    monkeypatch.setattr(pn.dbmod, "list_app_assignments", counting)
+    def event(cw):
+        ev = {"collection": "courses.courseWork.studentSubmissions", "eventType": "MODIFIED",
+              "resourceId": {"courseId": "c", "courseWorkId": cw, "id": "sub"}}
+        return {"message": {"data": base64.b64encode(json.dumps(ev).encode()).decode()}}
+    pn.handle_notification(event("ours"))
+    _forbid_db(monkeypatch)
+    for i in range(8):
+        assert pn.handle_notification(event(f"someone-elses-{i}"))["status"] == "ignored"
+    assert calls["n"] == 1
+    pn.forget_ownership()
+
+
+def test_assignment_whose_test_is_picked_later_grades_immediately(db, monkeypatch):
+    import base64, json
+    import bubble_grader.push_notify as pn
+    import bubble_grader.submissions as submissions
+    pn.forget_ownership()
+    db.record_app_assignment("c", "cw", test_id=None, title="T", created_by="t@x")
+    monkeypatch.setattr(pn.dbmod, "list_teachers", lambda: ["t@x"])
+    state = {"state": "CREATED"}
+    monkeypatch.setattr(pn, "get_submission", lambda *a: {
+        "state": state["state"], "userId": "s1", "updateTime": "2026-10-17T10:00:00Z"})
+    ev = {"collection": "courses.courseWork.studentSubmissions", "eventType": "MODIFIED",
+          "resourceId": {"courseId": "c", "courseWorkId": "cw", "id": "sub1"}}
+    body = {"message": {"data": base64.b64encode(json.dumps(ev).encode()).decode()}}
+    pn.handle_notification(body)                     # student opens it: no test yet
+    db.record_app_assignment("c", "cw", test_id="t", title="T")   # teacher picks the test
+    used = []
+    monkeypatch.setattr(submissions, "template_for_test", lambda t: ("tpl", "ref"))
+    monkeypatch.setattr(submissions, "grade_classroom_assignment",
+                        lambda e, c, cw, t, tpl, **k: used.append(t) or {"results": []})
+    state["state"] = "TURNED_IN"
+    pn.handle_notification(body)
+    assert used == ["t"]
+    pn.forget_ownership()
+
+
+def test_transient_error_lets_the_batch_retry(monkeypatch):
+    import bubble_grader.auto_grade as ag
+    monkeypatch.setattr(ag, "_attempted", set())
+    monkeypatch.setattr(ag.dbmod, "list_teachers", lambda: ["t@x"])
+    monkeypatch.setattr(ag, "list_courses", lambda email: [{"id": "c"}])
+    monkeypatch.setattr(ag.dbmod, "list_app_assignments",
+                        lambda c: [{"test_id": "t", "coursework_id": "cw", "created_at": None}])
+    monkeypatch.setattr(ag.dbmod, "list_submissions", lambda **k: [])
+    monkeypatch.setattr(ag, "list_submissions", lambda e, c, cw: [
+        {"userId": "s1", "state": "TURNED_IN", "updateTime": "2026-10-17T10:00:00Z"}])
+    monkeypatch.setattr(ag, "template_for_test", lambda t: ("tpl", "ref"))
+    monkeypatch.setattr(ag, "_assignment_liveness", lambda *a: "unknown")
+    outcome = {"fail": True}
+    def grade(email, c, cw, t, tpl, only_students):
+        if outcome["fail"]:
+            raise RuntimeError("Drive hiccup")
+        return {"results": [{"student_id": s, "status": "graded"} for s in only_students]}
+    monkeypatch.setattr(ag, "grade_classroom_assignment", grade)
+    assert ag.run_auto_grade_once()["students_graded"] == 0
+    outcome["fail"] = False
+    assert ag.run_auto_grade_once()["students_graded"] == 1
+
+
+def _creds_fixture(monkeypatch, refresh_token_after="rt-1", fail=False):
+    import datetime
+    import bubble_grader.google_api as ga
+    from google.oauth2.credentials import Credentials
+    stored = {"token": "old", "refresh_token": "rt-1", "token_uri": "https://x", "client_id": "id",
+              "client_secret": "s", "scopes": [], "id_token": None,
+              "expiry": (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=5)).isoformat()}
+    writes, reads = [], []
+    monkeypatch.setattr(ga, "load_credentials", lambda e: reads.append(e) or dict(stored))
+    monkeypatch.setattr(ga, "store_credentials", lambda e, d: writes.append(d))
+    def fake_refresh(self, request):
+        if fail:
+            from google.auth.exceptions import RefreshError
+            raise RefreshError("invalid_grant")
+        self.token = "new"
+        self._refresh_token = refresh_token_after
+        self.expiry = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(hours=1)
+    monkeypatch.setattr(Credentials, "refresh", fake_refresh)
+    ga.forget_credentials()
+    return ga, writes, reads
+
+
+def test_refreshing_an_access_token_does_not_write_to_the_database(monkeypatch):
+    ga, writes, reads = _creds_fixture(monkeypatch)
+    creds = ga._credentials_for("t@x")
+    assert creds.token == "new"          # expired token refreshed up front
+    ga._credentials_for("t@x")
+    assert writes == [] and reads == ["t@x"]
+    ga.forget_credentials()
+
+
+def test_a_new_refresh_token_is_saved(monkeypatch):
+    ga, writes, _ = _creds_fixture(monkeypatch, refresh_token_after="rt-2")
+    ga._credentials_for("t@x")
+    assert len(writes) == 1 and writes[0]["refresh_token"] == "rt-2"
+    ga.forget_credentials()
+
+
+def test_revoked_login_is_dropped_from_the_cache(monkeypatch):
+    from google.auth.exceptions import RefreshError
+    ga, _, reads = _creds_fixture(monkeypatch, fail=True)
+    for _ in range(2):
+        with pytest.raises(RefreshError):
+            ga._credentials_for("t@x")
+    assert reads == ["t@x", "t@x"]       # re-read each time, never served from cache
+    ga.forget_credentials()
+
+
+def test_api_docs_are_not_published():
+    with TestClient(server.app) as client:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert client.get(path).status_code == 404, path
