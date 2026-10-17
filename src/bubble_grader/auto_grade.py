@@ -48,8 +48,12 @@ def _as_dt(ts) -> datetime | None:
 _attempted: set[tuple] = set()
 
 
-def _newly_turned_in(email: str, course_id: str, coursework_id: str) -> list[str]:
-    """Student ids whose current turned-in work hasn't been graded yet."""
+def _newly_turned_in(email: str, course_id: str, coursework_id: str) -> list[tuple[str, tuple]]:
+    """(student id, attempt key) for turned-in work that hasn't been graded yet.
+
+    The caller marks a key as attempted only once it actually hands that
+    student to the grader, so students left over by a capped run are picked
+    up by the next one."""
     subs = list_submissions(email, course_id, coursework_id)
 
     # Latest grade time per student already in our DB (rows are newest-first).
@@ -60,7 +64,7 @@ def _newly_turned_in(email: str, course_id: str, coursework_id: str) -> list[str
         if sid and sid not in graded_at:
             graded_at[sid] = _as_dt(r.get("created_at"))
 
-    out: list[str] = []
+    out: list[tuple[str, tuple]] = []
     for s in subs:
         if s.get("state") != "TURNED_IN":
             continue  # only fresh turn-ins; RETURNED means already handled
@@ -75,8 +79,7 @@ def _newly_turned_in(email: str, course_id: str, coursework_id: str) -> list[str
         # Grade if we've never graded this student, or they re-submitted after
         # our most recent grade.
         if prev is None or (ut is not None and ut > prev):
-            out.append(sid)
-            _attempted.add(key)
+            out.append((sid, key))
     return out
 
 
@@ -142,15 +145,18 @@ def run_auto_grade_once(
                     return summary
                 try:
                     summary["assignments_checked"] += 1
-                    students = _newly_turned_in(email, course_id, cw_id)
-                    if not students:
+                    pending = _newly_turned_in(email, course_id, cw_id)
+                    if not pending:
                         continue
                     if max_students is not None:
                         room = max_students - (summary["students_graded"] + summary["students_failed"])
-                        students = students[:max(0, room)]
-                    if not students:
-                        summary["truncated"] = True
+                        if len(pending) > room:
+                            summary["truncated"] = True
+                        pending = pending[:max(0, room)]
+                    if not pending:
                         return summary
+                    _attempted.update(key for _sid, key in pending)
+                    students = [sid for sid, _key in pending]
                     template_path, _ref = template_for_test(test_id)
                     result = grade_classroom_assignment(
                         email, course_id, cw_id, test_id, template_path,

@@ -58,6 +58,26 @@ AUTO_GRADE_POLL_SECONDS = int(os.environ.get("AUTO_GRADE_POLL_SECONDS") or "60")
 # keep-warm ping. Unset = endpoint disabled.
 AUTO_GRADE_TOKEN = (os.environ.get("AUTO_GRADE_TOKEN") or "").strip()
 
+# The pinger hits /cron/auto-grade every 5 minutes to keep the function warm,
+# but the database sweep behind it runs only once per this many minutes.
+# Neon's free tier sleeps the database after 5 idle minutes and bills every
+# minute it's awake: a database touch on every ping keeps it awake around the
+# clock (~180 compute-hours a month against a 100-hour allowance). Turn-ins
+# are graded instantly by Classroom push notifications; the sweep is only the
+# safety net. Rounded to a multiple of the 5-minute ping interval;
+# invalid values fall back to 60.
+def _sweep_minutes(raw: str | None) -> int:
+    try:
+        value = int(str(raw).strip()) if raw not in (None, "") else 60
+    except ValueError:
+        return 60
+    # Never shorter than 15 minutes: a sweep on every ping is the setting
+    # that keeps the database awake around the clock.
+    return min(1440, max(15, round(value / 5) * 5))
+
+
+CRON_SWEEP_MINUTES = _sweep_minutes(os.environ.get("CRON_SWEEP_MINUTES"))
+
 # Real-time grading via Classroom push notifications (see push_notify.py).
 # PUBSUB_TOPIC is the full topic name Classroom publishes turn-in events to,
 # e.g. "projects/bubble-grader/topics/classroom-notifications"; unset = the

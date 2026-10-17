@@ -10,16 +10,23 @@ import json
 from cryptography.fernet import Fernet
 
 from .config import FERNET_KEY
-from .db_backend import get_conn, ddl_statements, is_postgres
+from .db_backend import get_conn, ddl_statements, is_postgres, on_first_connect
+
+
+def _create_schema(conn) -> None:
+    for stmt in ddl_statements():
+        conn.execute(stmt)
+    _migrate_add_scope_column(conn)
+    _migrate_add_not_scored_column(conn)
 
 
 def init_db() -> None:
     """Create tables + indexes if missing. Safe to call repeatedly."""
     with get_conn() as conn:
-        for stmt in ddl_statements():
-            conn.execute(stmt)
-        _migrate_add_scope_column(conn)
-        _migrate_add_not_scored_column(conn)
+        _create_schema(conn)
+
+
+on_first_connect(_create_schema)
 
 
 def _migrate_add_scope_column(conn) -> None:

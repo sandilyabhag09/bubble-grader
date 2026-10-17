@@ -3,8 +3,17 @@
 import base64
 import json
 
+import pytest
+
 import bubble_grader.push_notify as pn
 from bubble_grader.config import SCOPES
+
+
+@pytest.fixture(autouse=True)
+def _fresh_ownership_cache():
+    pn.forget_ownership()
+    yield
+    pn.forget_ownership()
 
 
 def _envelope(event: dict) -> dict:
@@ -136,7 +145,7 @@ def test_cron_ping_purges_old_scans(db, monkeypatch):
     with get_conn() as conn:
         conn.execute("UPDATE scan_files SET fetched_at = '2020-01-01 00:00:00' WHERE file_id = 'old'")
     with TestClient(server.app) as client:
-        r = client.get("/cron/auto-grade?token=tok")
+        r = client.get("/cron/auto-grade?token=tok&force=1")
     assert r.status_code == 200 and r.json()["scans_purged"] == 1
     assert [s for s in db.list_scan_students("c", "cw")] and db.get_student_scan("c", "cw", "s1") is None
     assert db.get_student_scan("c", "cw", "s2") is not None

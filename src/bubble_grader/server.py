@@ -28,6 +28,7 @@ from .config import (
     AUTO_GRADE_ON_TURNIN,
     AUTO_GRADE_TOKEN,
     CLASSROOM_PUSH_TOKEN,
+    CRON_SWEEP_MINUTES,
     FERNET_KEY,
     IS_VERCEL,
     SERVER_PORT,
@@ -41,7 +42,6 @@ from .google_auth import (
 from .feedback import send_feedback_for_assignment
 from .scoring import full_grade, section_is_dnf
 from .submissions import (
-    fetch_assignment,
     grade_classroom_assignment,
     release_grades,
 )
@@ -50,14 +50,24 @@ from .version_check import snapshot as update_snapshot, start_background_poller
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    dbmod.init_db()
     if not IS_VERCEL:
+        # Locally, fail fast on a bad database. On Vercel the schema is set up
+        # by the first request that needs the database (db_backend
+        # on_first_connect), so a bare cold start never wakes it.
+        dbmod.init_db()
         # Background threads make no sense on serverless — requests are the
         # only execution there. Locally they behave exactly as before.
         start_background_poller()
         if AUTO_GRADE_ON_TURNIN:
-            from .auto_grade import start_auto_grade_poller
-            start_auto_grade_poller()
+            from .db_backend import is_postgres
+            if is_postgres():
+                # A shared hosted database is already swept by the hosted app;
+                # polling it every minute from a laptop would keep it awake.
+                print("[auto-grade] local poller off: DATABASE_URL is the shared "
+                      "database, which the hosted app already grades.")
+            else:
+                from .auto_grade import start_auto_grade_poller
+                start_auto_grade_poller()
     yield
 
 
@@ -75,6 +85,16 @@ app.add_middleware(SessionMiddleware, secret_key=_session_secret, session_cookie
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots_txt():
+    # Crawlers following the sign-in link would each start an OAuth flow.
+    return Response(
+        "User-agent: *\nDisallow: /oauth/\nDisallow: /cron/\nDisallow: /hooks/\n"
+        "Disallow: /courses/\nDisallow: /dashboard\nDisallow: /tests\n",
+        media_type="text/plain",
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -566,7 +586,8 @@ def new_assignment_submit(
     # First app assignment in this course → start listening for turn-ins now
     # rather than waiting for the next cron ping. Best-effort.
     try:
-        from .push_notify import ensure_registrations
+        from .push_notify import ensure_registrations, forget_ownership
+        forget_ownership(course_id, cw["id"])
         ensure_registrations(course_ids=[course_id], time_budget=15)
     except Exception:  # noqa: BLE001
         pass
@@ -909,17 +930,39 @@ def healthz_deep():
     return JSONResponse({"ok": ok, "checks": checks}, status_code=200 if ok else 503)
 
 
+PING_INTERVAL_MINUTES = 5
+
+
+def _now_minutes() -> int:
+    import time
+    return int(time.time() // 60)
+
+
+def _sweep_due(epoch_minutes: int, every: int = CRON_SWEEP_MINUTES) -> bool:
+    """True for the one 5-minute ping per ``every``-minute cycle that should
+    touch the database (the first ping of each cycle, on wall-clock time)."""
+    return epoch_minutes % every < PING_INTERVAL_MINUTES
+
+
 @app.get("/cron/auto-grade")
-def cron_auto_grade(token: str = ""):
+def cron_auto_grade(token: str = "", force: str = ""):
     """Grade everything newly turned in — trigger for an external pinger.
 
     Serverless hosts can't run background threads, so an external pinger
-    (e.g. UptimeRobot every 5 minutes) hits this instead; it also keeps the
-    function warm. Bounded so one run always fits the request time limit;
-    leftovers are picked up by the next ping. Requires AUTO_GRADE_TOKEN.
+    (UptimeRobot every 5 minutes) hits this; every ping keeps the function
+    warm, but only one ping per CRON_SWEEP_MINUTES touches the database (see
+    config). ``force=1`` runs the sweep now. Bounded by time so one run always
+    fits the request time limit; leftovers are picked up by the next sweep.
+    Requires AUTO_GRADE_TOKEN.
     """
     if not AUTO_GRADE_TOKEN or token != AUTO_GRADE_TOKEN:
         raise HTTPException(404, "Not found.")
+    now_min = _now_minutes()
+    if force not in ("1", "true", "yes") and not _sweep_due(now_min):
+        wait = (CRON_SWEEP_MINUTES - now_min % CRON_SWEEP_MINUTES) % CRON_SWEEP_MINUTES
+        return {"swept": False, "next_sweep_in_minutes": wait,
+                "why": "warm-up ping only; the database sweep runs every "
+                       f"{CRON_SWEEP_MINUTES} min (turn-ins grade instantly via push)"}
     from .auto_grade import run_auto_grade_once
     from .push_notify import ensure_registrations
     # Keep Classroom's push registrations alive first (cheap, ~1 call per
@@ -928,7 +971,8 @@ def cron_auto_grade(token: str = ""):
         registrations = ensure_registrations(time_budget=30)
     except Exception as e:  # noqa: BLE001 — never block grading on this
         registrations = {"error": f"{type(e).__name__}: {e}"}
-    summary = run_auto_grade_once(max_students=10, time_budget=180)
+    summary = run_auto_grade_once(time_budget=180)
+    summary["swept"] = True
     summary["registrations"] = registrations
     # Scans are only swept when something gets graded; in a quiet stretch they
     # would outlive the retention window, so sweep on every ping too.
@@ -1502,69 +1546,6 @@ def tests_delete(request: Request, test_id: str):
     dbmod.delete_test(test_id)
     _flash(request, "ok", f"Deleted test '{test_id}'.")
     return RedirectResponse("/tests", status_code=303)
-
-
-# ----- JSON API kept for the CLI --------------------------------------------
-
-@app.get("/teachers")
-def teachers_api():
-    return {"teachers": dbmod.list_teachers()}
-
-
-@app.get("/teachers/{email}/courses")
-def teacher_courses_api(email: str):
-    try:
-        courses = list_courses(email)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    return {
-        "email": email,
-        "count": len(courses),
-        "courses": [{"id": c["id"], "name": c["name"], "section": c.get("section")} for c in courses],
-    }
-
-
-@app.get("/teachers/{email}/courses/{course_id}/coursework")
-def teacher_coursework_api(email: str, course_id: str):
-    items = list_coursework(email, course_id)
-    return {
-        "count": len(items),
-        "items": [
-            {"id": cw["id"], "title": cw.get("title"), "type": cw.get("workType"),
-             "state": cw.get("state"), "due": cw.get("dueDate")}
-            for cw in items
-        ],
-    }
-
-
-@app.get("/teachers/{email}/courses/{course_id}/students")
-def teacher_students_api(email: str, course_id: str):
-    return {
-        "students": [
-            {"id": s["userId"],
-             "name": (s.get("profile") or {}).get("name", {}).get("fullName"),
-             "email": (s.get("profile") or {}).get("emailAddress")}
-            for s in list_roster(email, course_id)
-        ]
-    }
-
-
-@app.get("/teachers/{email}/courses/{course_id}/coursework/{cw_id}/submissions")
-def teacher_submissions_api(email: str, course_id: str, cw_id: str):
-    subs = list_submissions(email, course_id, cw_id)
-    return {
-        "count": len(subs),
-        "submissions": [
-            {"id": s["id"], "user_id": s["userId"], "state": s.get("state"),
-             "attachments": len((s.get("assignmentSubmission") or {}).get("attachments", []) or [])}
-            for s in subs
-        ],
-    }
-
-
-@app.post("/teachers/{email}/courses/{course_id}/coursework/{cw_id}/fetch")
-def teacher_fetch_api(email: str, course_id: str, cw_id: str, only_turned_in: bool = True):
-    return fetch_assignment(email, course_id, cw_id, only_turned_in=only_turned_in)
 
 
 def main() -> None:

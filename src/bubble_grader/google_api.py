@@ -22,7 +22,9 @@ from .google_auth import (
     ensure_fresh,
 )
 
-_CREDS_TTL_SECONDS = 10 * 60
+# Long enough that a stream of Classroom notifications for one teacher reads
+# the credentials from the database once, not every few minutes.
+_CREDS_TTL_SECONDS = 45 * 60
 _creds_cache: dict[str, tuple[object, dict, float]] = {}  # email -> (creds, raw, expires_at)
 _lock = threading.Lock()
 

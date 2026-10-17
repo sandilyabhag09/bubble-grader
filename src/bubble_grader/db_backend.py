@@ -191,18 +191,50 @@ class Connection:
             self.close()
 
 
+# Schema setup runs on the first connection a process actually makes, not at
+# startup: on serverless every cold start (even a bare health ping) would
+# otherwise wake the database, and Neon's free tier bills every minute awake.
+_first_connect_hooks: list = []
+_first_connect_done = False
+_first_connect_lock = threading.Lock()
+
+
+def on_first_connect(fn) -> None:
+    """Register ``fn(conn)`` to run once per process, before the first query."""
+    _first_connect_hooks.append(fn)
+
+
+def _run_first_connect_hooks(conn: "Connection") -> None:
+    global _first_connect_done
+    if _first_connect_done:
+        return
+    with _first_connect_lock:
+        if _first_connect_done:
+            return
+        for fn in _first_connect_hooks:
+            fn(conn)
+        # Commit now: if the request that triggered this later fails and rolls
+        # back, the schema must not go with it (the flag below won't re-run it).
+        conn.commit()
+        _first_connect_done = True
+
+
 @contextmanager
 def get_conn() -> Iterator[Connection]:
     if is_postgres():
         # pool.connection() commits on clean exit and rolls back on exception.
         with _get_pool().connection() as raw:
-            yield Connection(raw, is_pg=True)
+            conn = Connection(raw, is_pg=True)
+            _run_first_connect_hooks(conn)
+            yield conn
             raw.commit()
     else:
         raw = sqlite3.connect(DB_PATH)
         raw.row_factory = sqlite3.Row
         try:
-            yield Connection(raw, is_pg=False)
+            conn = Connection(raw, is_pg=False)
+            _run_first_connect_hooks(conn)
+            yield conn
             raw.commit()
         finally:
             raw.close()
