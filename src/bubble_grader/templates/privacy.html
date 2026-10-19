@@ -32,10 +32,12 @@
     <ul>
       <li>Teachers' Google sign-in tokens, encrypted at rest, so the app can grade without the teacher
         being present. Deleted when the teacher revokes access.</li>
-      <li>Grades and per-question results for each submission, kept so teachers and students can look
-        back at past tests.</li>
-      <li>Student scan files, kept only while a test is being graded and deleted afterwards
-        (automatically after 14 days at the latest).</li>
+      <li>Grades and per-question results for each submission, kept so teachers can look back at
+        past tests (students see their grade in Classroom and any score email). For a question flagged for the teacher to check (left blank or with two
+        answers), that includes a small close-up picture of that row of the answer sheet.</li>
+      <li>Student scan files, kept only while they're needed for grading and the score emails, and
+        deleted afterwards (automatically within 14 days of being downloaded). The originals stay
+        with the student's turned-in work in Google Classroom.</li>
     </ul>
     <p>Data lives in a private database used only by this app. It is never sold, shared with
       advertisers, or used for anything other than grading and reporting scores to the teacher and

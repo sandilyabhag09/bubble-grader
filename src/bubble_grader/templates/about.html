@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .about { max-width: 880px; margin: 0 auto; }
+  .about .lede { font-size: 17px; line-height: 1.6; color: var(--color-fg-muted); max-width: 680px; margin: 0 0 var(--space-8); }
+  .about h2 { margin: var(--space-10) 0 var(--space-3); }
+  .about p, .about li { line-height: 1.6; }
+  .about .eyebrow {
+    display: inline-flex; padding: 4px 12px; border-radius: var(--radius-pill);
+    background: var(--color-info-bg); color: var(--color-secondary);
+    font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: var(--space-4);
+  }
+
+  /* How it works: four steps, connected left to right (top to bottom on phones). */
+  .steps { list-style: none; padding: 0; margin: var(--space-5) 0 0; display: grid;
+           grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); counter-reset: step; }
+  .step { position: relative; background: var(--color-surface); border: 1px solid var(--color-border);
+          border-radius: var(--radius-lg); padding: var(--space-5); box-shadow: var(--shadow-sm); }
+  .step .icon { width: 44px; height: 44px; border-radius: var(--radius-md); display: grid; place-items: center;
+                background: var(--color-info-bg); color: var(--color-secondary); margin-bottom: var(--space-3); }
+  .step .num { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--color-fg-subtle);
+               letter-spacing: 0.04em; text-transform: uppercase; }
+  .step h4 { margin: var(--space-1) 0 var(--space-2); font-size: 15px; line-height: 1.35; }
+  .step p { margin: 0; font-size: 13px; color: var(--color-fg-muted); }
+  .step:not(:last-child)::after {
+    content: ""; position: absolute; top: 34px; right: calc(-1 * var(--space-4) + 2px);
+    width: calc(var(--space-4) - 4px); height: 2px; background: var(--color-border-strong);
+  }
+  .step.done .icon { background: var(--color-success-bg); color: var(--color-success); }
+  @media (max-width: 760px) {
+    .steps { grid-template-columns: 1fr; }
+    .step:not(:last-child)::after { top: auto; bottom: calc(-1 * var(--space-4) + 2px); left: 42px; right: auto;
+                                     width: 2px; height: calc(var(--space-4) - 4px); }
+  }
+
+  /* Before / after example: one figure at a time, flipped with two radio "tabs". */
+  .flip { margin-top: var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border);
+          border-radius: var(--radius-lg); padding: var(--space-3); box-shadow: var(--shadow-sm); }
+  .flip input { position: absolute; opacity: 0; pointer-events: none; }
+  .flip label { display: inline-block; cursor: pointer; font-size: 13px; font-weight: 600; padding: 6px 12px;
+                border-radius: var(--radius-pill); color: var(--color-fg-muted); border: 1px solid transparent;
+                margin: 0 var(--space-1) var(--space-3) 0; }
+  .flip label:hover { color: var(--color-fg); }
+  .flip input:checked + label { background: var(--color-info-bg); color: var(--color-secondary); border-color: var(--color-border); }
+  .flip input:focus-visible + label { box-shadow: 0 0 0 3px var(--color-ring); }
+  .flip figure { margin: 0; display: none; }
+  #view-after:checked ~ .f-after, #view-before:checked ~ .f-before { display: block; }
+  .flip img { display: block; width: 100%; height: auto; border-radius: var(--radius-sm); background: #fff; }
+  .flip figcaption { font-size: 13px; color: var(--color-fg-muted); padding: var(--space-3) var(--space-1) var(--space-1); }
+  .legend { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); margin-top: var(--space-3); font-size: 13px; color: var(--color-fg-muted); }
+  .legend span { display: inline-flex; align-items: center; gap: var(--space-2); }
+  .made-up { font-size: 12px; color: var(--color-fg-subtle); margin-top: var(--space-2); }
+
+  .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-4); }
+  @media (max-width: 560px) { .facts { grid-template-columns: 1fr; } }
+  .facts .card { margin: 0; }
+  .facts .card p { margin: 0; font-size: 14px; color: var(--color-fg-muted); }
+  .facts .card h4 { margin: 0 0 var(--space-2); font-size: 15px; }
+
+  .faq details { border-bottom: 1px solid var(--color-border); padding: var(--space-4) 0; }
+  .faq details:first-of-type { border-top: 1px solid var(--color-border); }
+  .faq summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: var(--space-4); }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after { content: "+"; color: var(--color-fg-subtle); font-weight: 400; font-size: 20px; line-height: 1; }
+  .faq details[open] summary::after { content: "–"; }
+  .faq details p { margin: var(--space-3) 0 0; color: var(--color-fg-muted); }
+
+  .disclaimer { margin-top: var(--space-10); padding-top: var(--space-5); border-top: 1px solid var(--color-border);
+                font-size: 12px; color: var(--color-fg-subtle); }
+</style>
+
+<div class="about">
+  <div class="crumbs"><a href="/">Home</a> / About</div>
+
+  <div class="eyebrow">About this site</div>
+  <h1>What is Grader Form v2?</h1>
+  <p class="lede">
+    Grader Form v2 grades paper ACT practice tests for a small ACT tutoring program. Students turn in a
+    photo of their filled-in answer sheet on Google Classroom, and their score comes back to them there.
+  </p>
+  <p>
+    Only the program's teachers sign in here. Students and parents never need an account on this site:
+    students do everything in Google Classroom, the same way they would for any other assignment.
+  </p>
+
+  <h2>How it works</h2>
+  <ol class="steps" aria-label="How a practice test gets graded">
+    <li class="step">
+      <div class="icon" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg>
+      </div>
+      <div class="num">Step 1</div>
+      <h4>The teacher assigns a practice test</h4>
+      <p>They create it from this site and pick which test it is. It shows up in Google Classroom like any other assignment.</p>
+    </li>
+    <li class="step">
+      <div class="icon" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+      </div>
+      <div class="num">Step 2</div>
+      <h4>The student turns in a photo</h4>
+      <p>They fill in a paper ACT answer sheet, photograph or scan it, attach it and click Turn in.</p>
+    </li>
+    <li class="step">
+      <div class="icon" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5" fill="currentColor"/><circle cx="9" cy="15" r="1.5" fill="currentColor"/><circle cx="15" cy="15" r="1.5"/></svg>
+      </div>
+      <div class="num">Step 3</div>
+      <h4>The app reads and scores it</h4>
+      <p>It lines the photo up with a blank answer sheet, finds each filled-in bubble, and checks it against the test's answer key.</p>
+    </li>
+    <li class="step done">
+      <div class="icon" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
+      </div>
+      <div class="num">Step 4</div>
+      <h4>The score appears in Classroom</h4>
+      <p>Usually within minutes. A back-up check about once an hour picks up turn-ins it missed on recent assignments.</p>
+    </li>
+  </ol>
+  <p style="margin-top: var(--space-5);">
+    The app counts the correct answers in English, Math, Reading and Science, turns each count into a
+    score from 1 to 36 using that practice test's own score chart, and averages the four into a
+    composite. Phone photos work, including the HEIC format iPhones use; scanned PDFs work too (only
+    the first page is read). It knows three answer-sheet layouts (the older ACT sheet, the 2025 ACT
+    sheet, and the program's shorter version of it without trial-question rows), and if a student fills
+    in a different one from the one the test expects, it tries the others.
+  </p>
+
+  <h2>What students get back</h2>
+  <p>
+    A grade on the assignment in Google Classroom. For a full practice test that's the composite score
+    from 1 to 36; if the teacher assigned only one passage or a range of questions, it's based on how many
+    of those questions were answered correctly.
+  </p>
+  <p>
+    If the teacher chooses, each student also gets an email, sent from the teacher's own address, with
+    their scores (each section's score for a full test, or the passage score), the numbers of the
+    questions they missed, and usually a marked-up copy of their own answer sheet:
+  </p>
+
+  <div class="flip">
+    <input type="radio" name="sheet-view" id="view-after" checked>
+    <label for="view-after">Marked up by the app</label>
+    <input type="radio" name="sheet-view" id="view-before">
+    <label for="view-before">As the student turned it in</label>
+    <figure class="f-after">
+      <a href="/static/about/sheet-after.webp" target="_blank" rel="noopener">
+        <img src="/static/about/sheet-after.webp" width="1200" height="642"
+             alt="An ACT answer sheet marked by the app: green circles around correct answers, red Xs on wrong answers, and whole rows crossed out where a question was left blank or had two answers.">
+      </a>
+      <figcaption>The same sheet after the app checks it against the answer key. Tap to open full size.</figcaption>
+    </figure>
+    <figure class="f-before">
+      <a href="/static/about/sheet-before.webp" target="_blank" rel="noopener">
+        <img src="/static/about/sheet-before.webp" width="1200" height="643"
+             alt="Part of an answer sheet, English and Math sections, with bubbles filled in (a computer-made example).">
+      </a>
+      <figcaption>A filled-in sheet like the one a student turns in, made on a computer for this page. A real phone photo is usually a little tilted; the app straightens it first. Tap to open full size.</figcaption>
+    </figure>
+  </div>
+  <div class="legend" aria-hidden="true">
+    <span><svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="7" fill="none" stroke="#00C800" stroke-width="2"/></svg> Correct</span>
+    <span><svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 3l12 12M3 15L15 3" stroke="#E00000" stroke-width="2"/></svg> Wrong answer</span>
+    <span><svg width="48" height="18" viewBox="0 0 48 18"><path d="M3 3l12 12M3 15L15 3M18 3l12 12M18 15L30 3M33 3l12 12M33 15L45 3" stroke="#E00000" stroke-width="2"/></svg> Left blank, or more than one bubble filled (no credit)</span>
+  </div>
+  <p class="made-up">Example made on a computer with invented answers, then marked up by the app itself. No real student's work is shown on this page.</p>
+  <p>
+    Some newer ACT tests include trial questions that ACT doesn't count. On a full practice test they
+    never count toward the score here either. If a student missed one, the email lists it separately as
+    "not scored" so they can still learn from it.
+  </p>
+
+  <h2>When the app isn't sure</h2>
+  <ul>
+    <li><strong>It won't grade a sheet it can't line up.</strong> If a photo can't be matched to a known
+      answer sheet (a different form, too blurry, or too little of the sheet showing), no score is
+      recorded. The app tries any other photos attached to the same turn-in; if none can be read, the
+      teacher sees why and the student can turn in a clearer photo.</li>
+    <li><strong>A partly cut-off photo is still graded.</strong> Questions missing from the photo earn no
+      credit and are flagged for the teacher, so a photo of the whole sheet matters.</li>
+    <li><strong>Blank and double-marked rows are flagged.</strong> A question read as blank or with more
+      than one bubble filled earns no credit, and each one is listed for the teacher, usually with a
+      close-up picture of that row. If one mark is clearly darker than another (say, a half-erased
+      answer), the app takes the darker one.</li>
+    <li><strong>Teachers can correct it.</strong> On a full practice test they can enter the answer the
+      student meant, or fix any other question; the score is worked out again and the new grade can be
+      sent to Classroom. So a grade can change after it first appears.</li>
+  </ul>
+  <p>A clear, flat, in-focus photo of the whole sheet works best.</p>
+
+  <h2>Is this AI?</h2>
+  <p>
+    No. Grading follows fixed rules: the app measures how dark each bubble is and compares the answers
+    with the test's answer key. No AI model looks at students' sheets or decides their scores.
+  </p>
+
+  <h2>Who can use it, and what it keeps</h2>
+  <div class="facts">
+    <div class="card">
+      <h4>Teachers only</h4>
+      <p>Only teachers on the program's approved list can sign in. Anyone else is turned away and their sign-in is never saved.</p>
+    </div>
+    <div class="card">
+      <h4>Through the teacher's Google account</h4>
+      <p>It sees the teacher's Classroom classes, class lists and turned-in work, reads only the files students attach, and sends email only when the teacher asks.</p>
+    </div>
+    <div class="card">
+      <h4>Photos are temporary</h4>
+      <p>Full answer-sheet photos are deleted once the score emails go out, or automatically within 14 days. Small close-ups of flagged rows are kept with the grade. The original stays with the student's work in Classroom.</p>
+    </div>
+    <div class="card">
+      <h4>Scores are kept</h4>
+      <p>Grades and question-by-question results are kept so teachers can look back at past tests. Students keep their grade in Classroom and any score email. Nothing is sold or shared with advertisers.</p>
+    </div>
+  </div>
+  <p style="margin-top: var(--space-4);">The <a href="/privacy">privacy policy</a> has the full details, including how to ask for data to be deleted.</p>
+
+  <h2>Common questions</h2>
+  <div class="faq">
+    <details>
+      <summary>I'm a parent or student. Do I need to do anything on this site?</summary>
+      <p>No. Students turn in a photo of their answer sheet in Google Classroom as usual, and the grade appears there. This site is for the program's teachers.</p>
+    </details>
+    <details>
+      <summary>How soon does the score show up?</summary>
+      <p>Usually within minutes of the turn-in. A back-up check about once an hour picks up recent turn-ins it missed, and teachers can grade any assignment by hand. If the photo can't be matched to an answer sheet at all, no score is posted, and the teacher sees that and can follow up.</p>
+    </details>
+    <details>
+      <summary>What if a score looks wrong?</summary>
+      <p>Tell the teacher. They can look at the marked-up sheet and the rows the app flagged, and fix the grade if it's wrong.</p>
+    </details>
+    <details>
+      <summary>Do parents get the score email?</summary>
+      <p>No. The app only ever emails the student, at the address on the Google Classroom class list, and only when the teacher sends it.</p>
+    </details>
+    <details>
+      <summary>Why does Google's sign-in screen say "Bubble Grader"?</summary>
+      <p>It's the same app. Google's sign-in screen and the privacy policy call it Bubble Grader; the top of this site says Grader Form v2.</p>
+    </details>
+  </div>
+
+  <p class="disclaimer">
+    Not affiliated with or endorsed by ACT, Inc. or Google. ACT is a registered trademark of ACT, Inc.
+    See the <a href="/privacy">privacy policy</a> for exactly what data the app uses and keeps, and how to reach us.
+  </p>
+</div>
+{% endblock %}

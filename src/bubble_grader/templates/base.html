@@ -182,6 +182,12 @@
       font-size: 14px;
     }
     header.bar nav a:hover { color: var(--color-fg); text-decoration: none; }
+    header.bar .brand, header.bar nav a { white-space: nowrap; }
+    @media (max-width: 640px) {
+      header.bar { padding: 0 var(--space-4); }
+      header.bar nav { gap: var(--space-3); }
+      header.bar nav .who { display: none; }
+    }
     header.bar nav .who {
       color: var(--color-fg-subtle);
       font-family: var(--font-mono);
@@ -442,6 +448,7 @@
   <header class="bar">
     <a class="brand" href="/">Grader Form v2</a>
     <nav>
+      <a href="/about">About</a>
       {% if signed_in_as %}
         <a href="/dashboard">Courses</a>
         <a href="/tests">Tests</a>
